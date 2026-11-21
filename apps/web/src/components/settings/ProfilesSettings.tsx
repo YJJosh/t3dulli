@@ -894,7 +894,7 @@ function ProfilesEditor(props: {
             }
           />
           <NamedChecklist
-            title={gt("Prompts")}
+            title={gt("Instructions")}
             description={gt("Added to the agent’s instructions in this order.")}
             names={orderedNames(
               profile.prompts,
