@@ -410,7 +410,7 @@ function ProfilesEditor(props: {
                 />
               </View>
               <Text className="text-sm text-foreground-muted">
-                <T>Prompts</T>
+                <T>Instructions</T>
               </Text>
             </View>
             {[...new Set([...profile.prompts, ...state.prompts.map((prompt) => prompt.name)])].map(
