@@ -339,6 +339,10 @@
       "types": "./src/state/projectGrouping.ts",
       "default": "./src/state/projectGrouping.ts"
     },
+    "./state/multi-repo-status": {
+      "types": "./src/state/multiRepoStatus.ts",
+      "default": "./src/state/multiRepoStatus.ts"
+    },
     "./state/relay": {
       "types": "./src/state/relayDiscovery.ts",
       "default": "./src/state/relayDiscovery.ts"

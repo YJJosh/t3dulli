@@ -100,7 +100,8 @@ type QuickActionIcon =
   | "arrow.up.circle";
 
 export type ThreadGitMenuProps = {
-  readonly isMultiRepoProject?: boolean;
+  /** The member folders of a multi-repo project, which has no repository of its own. */
+  readonly multiRepoMembers?: ReadonlyArray<string> | null;
   readonly environmentId: EnvironmentId | string;
   readonly threadId: ThreadId | string;
   readonly currentBranch: string | null;
@@ -358,7 +359,7 @@ export function useThreadGitMenuDefinition(props: ThreadGitMenuProps): AppBarMen
     id: "git-review",
     title: gt("Review changes"),
     icon: "text.bubble",
-    disabled: (!props.isMultiRepoProject && !model.isRepo) || props.hasThread === false,
+    disabled: (!props.multiRepoMembers && !model.isRepo) || props.hasThread === false,
     subtitle:
       props.hasThread === false
         ? gt("Available after the first message")
@@ -366,12 +367,24 @@ export function useThreadGitMenuDefinition(props: ThreadGitMenuProps): AppBarMen
     onPress: model.openReview,
   } satisfies AppBarMenu["items"][number];
   // A group has no repository of its own: Git actions run in each member, but Review shows them all.
-  if (props.isMultiRepoProject) {
+  if (props.multiRepoMembers) {
     return {
       title: gt("Git controls"),
       icon: "point.topleft.down.curvedto.point.bottomright.up",
       separateBackground: false,
-      items: [reviewItem],
+      items: [
+        {
+          id: "git-status",
+          title: compactMenuBranchLabel(props.currentBranch ?? gt("Multi-repo project")),
+          icon: "point.topleft.down.curvedto.point.bottomright.up",
+          disabled: true,
+          subtitle: gt("{count, plural, one {{count} repository} other {{count} repositories}}", {
+            count: props.multiRepoMembers.length,
+          }),
+          onPress: () => {},
+        },
+        reviewItem,
+      ],
     };
   }
   return {
