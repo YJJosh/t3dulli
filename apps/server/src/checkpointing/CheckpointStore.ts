@@ -164,7 +164,18 @@ export const make = Effect.gen(function* () {
     "CheckpointStore.isGitRepository",
   )(function* (cwd) {
     if ((yield* vcsRegistry.detect({ cwd, requestedKind: "git" })) !== null) return true;
-    if (((yield* Cache.get(membersCache, cwd))?.length ?? 0) > 0) return true;
+    // A group counts once a member is cloned: a leftover `.workler` alone is no checkout.
+    const members = yield* Cache.get(membersCache, cwd);
+    if (members !== null) {
+      for (const member of members) {
+        if (
+          (yield* vcsRegistry.detect({ cwd: path.join(cwd, member), requestedKind: "git" })) !==
+          null
+        )
+          return true;
+      }
+      return false;
+    }
     const git = yield* vcsRegistry.get("git");
     return (yield* git.detectRepository(cwd)) !== null;
   });
@@ -245,55 +256,70 @@ export const make = Effect.gen(function* () {
     const targets =
       input.fallbackToHead === true ? members : yield* membersWithRef(members, input.checkpointRef);
     if (targets.length === 0) return false;
-    // Each member's files are saved first, so a member that fails puts the others back.
+    // Each member's files are saved first, so a member that fails puts the others back. The
+    // conversation may already be rewound, so a member Git can't save still gets restored.
     const undoRef = CheckpointRef.make(`${input.checkpointRef}-restore-undo`);
-    yield* Effect.forEach(
-      targets,
-      (member) => member.checkpoints.captureCheckpoint({ cwd: member.cwd, checkpointRef: undoRef }),
-      { concurrency: MEMBER_CONCURRENCY, discard: true },
-    );
-    // The member that failed may have written part of its files too.
-    const undo = Effect.forEach(
+    const dropUndo = Effect.forEach(
       targets,
       (member) =>
         member.checkpoints
-          .restoreCheckpoint({ cwd: member.cwd, checkpointRef: undoRef, fallbackToHead: false })
-          .pipe(
+          .deleteCheckpointRefs({ cwd: member.cwd, checkpointRefs: [undoRef] })
+          .pipe(Effect.ignore),
+      { discard: true },
+    );
+    const run = Effect.gen(function* () {
+      const saved = yield* Effect.forEach(
+        targets,
+        (member) =>
+          member.checkpoints.captureCheckpoint({ cwd: member.cwd, checkpointRef: undoRef }).pipe(
+            Effect.as(true),
             Effect.catch((error) =>
-              Effect.logWarning("Could not put a multi-repo member back after a failed restore", {
+              Effect.logWarning("Could not save a multi-repo member before restoring it", {
                 cwd: member.cwd,
                 detail: error.message,
-              }),
+              }).pipe(Effect.as(false)),
             ),
           ),
-      { discard: true },
-    );
-    const outcome = yield* Effect.forEach(
-      targets,
-      (member) =>
-        member.checkpoints
-          .restoreCheckpoint({ ...input, cwd: member.cwd })
-          .pipe(Effect.flatMap((ok) => (ok ? Effect.void : Effect.fail("unavailable" as const)))),
-      { discard: true },
-    ).pipe(
-      Effect.as(true),
-      Effect.catch((failure) =>
-        undo.pipe(
-          Effect.andThen(failure === "unavailable" ? Effect.succeed(false) : Effect.fail(failure)),
+        { concurrency: MEMBER_CONCURRENCY },
+      );
+      const canUndo = saved.every(Boolean);
+      // Only members the restore reached changed, the failing one perhaps partly.
+      const reached: Array<Member> = [];
+      const undo = Effect.forEach(
+        reached,
+        (member) =>
+          member.checkpoints
+            .restoreCheckpoint({ cwd: member.cwd, checkpointRef: undoRef, fallbackToHead: false })
+            .pipe(
+              Effect.catch((error) =>
+                Effect.logWarning("Could not put a multi-repo member back after a failed restore", {
+                  cwd: member.cwd,
+                  detail: error.message,
+                }),
+              ),
+            ),
+        { discard: true },
+      );
+      return yield* Effect.forEach(
+        targets,
+        (member) =>
+          Effect.sync(() => reached.push(member)).pipe(
+            Effect.andThen(member.checkpoints.restoreCheckpoint({ ...input, cwd: member.cwd })),
+            Effect.flatMap((ok) => (ok ? Effect.void : Effect.fail("unavailable" as const))),
+          ),
+        { discard: true },
+      ).pipe(
+        Effect.as(true),
+        Effect.catch((failure) =>
+          (canUndo ? undo : Effect.void).pipe(
+            Effect.andThen(
+              failure === "unavailable" ? Effect.succeed(false) : Effect.fail(failure),
+            ),
+          ),
         ),
-      ),
-      Effect.ensuring(
-        Effect.forEach(
-          targets,
-          (member) =>
-            member.checkpoints
-              .deleteCheckpointRefs({ cwd: member.cwd, checkpointRefs: [undoRef] })
-              .pipe(Effect.ignore),
-          { discard: true },
-        ),
-      ),
-    );
-    return outcome;
+      );
+    });
+    return yield* run.pipe(Effect.ensuring(dropUndo));
   });
 
   /** Splits group paths by member; null keeps every path of every member. */

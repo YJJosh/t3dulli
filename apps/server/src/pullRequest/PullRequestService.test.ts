@@ -3433,6 +3433,64 @@ it.effect("fills in the line counts for the rows it is given", () =>
   }),
 );
 
+it.effect("fills in line counts for every member of a multi-repo project", () =>
+  Effect.gen(function* () {
+    const asked: Array<unknown> = [];
+    const identities = {
+      "/shop/api": project({
+        id: "x",
+        title: "api",
+        workspaceRoot: "/shop/api",
+        repository: "acme/api",
+      }),
+      "/shop/web": project({
+        id: "x",
+        title: "web",
+        workspaceRoot: "/shop/web",
+        repository: "acme/web",
+      }),
+    } as Record<string, OrchestrationProjectShell>;
+    const service = yield* makeService({
+      projects: [
+        {
+          ...project({ id: "shop", title: "shop", workspaceRoot: "/shop", repository: "acme/api" }),
+          repositoryIdentity: null,
+          multiRepo: {
+            members: [
+              { path: "api", remoteUrl: "https://github.com/acme/api" },
+              { path: "web", remoteUrl: "https://github.com/acme/web" },
+            ],
+          },
+        },
+      ],
+      providers: [
+        fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+          listChangeRequestStats: (input) => {
+            asked.push(...input.changeRequests);
+            return Effect.succeed(
+              input.changeRequests.map((ref) => ({ ...ref, additions: 1, deletions: 0 })),
+            );
+          },
+        }),
+      ],
+      resolveRepositoryIdentity: (cwd) =>
+        Effect.succeed(identities[cwd]?.repositoryIdentity ?? null),
+    });
+
+    const result = yield* service.listStats({
+      refs: [
+        { projectId: "shop" as ProjectId, repository: "acme/api", number: 1 },
+        { projectId: "shop" as ProjectId, repository: "acme/web", number: 2 },
+      ],
+    });
+
+    assert.deepStrictEqual(
+      result.stats.map((stat) => `${stat.repository}#${stat.number}`).toSorted(),
+      ["acme/api#1", "acme/web#2"],
+    );
+  }),
+);
+
 it.effect("reads the fresh diff when detail or summary discovers a changed revision", () =>
   Effect.gen(function* () {
     const summaryStarted = yield* Deferred.make<void>();

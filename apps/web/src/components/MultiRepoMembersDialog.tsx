@@ -75,11 +75,14 @@ function MultiRepoMembersDialog({ projectRef }: { projectRef: ScopedProjectRef }
   const id = useId();
   const project = useProject(projectRef);
   const { environmentId, projectId } = projectRef;
+  // Read again on every open and after every change here: another client or an agent can
+  // change the list too.
+  const session = useRequest((state) => state.session);
   const revision = useRequest((state) => state.revision);
   const listed = useEnvironmentQuery(
     revisionedQuery(
       projectEnvironment.multiRepoMembers({ environmentId, input: { projectId } }),
-      String(revision),
+      `${session}:${revision}`,
     ),
   );
   // Each change answers with the new lists, so they show before the query reruns.

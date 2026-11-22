@@ -129,6 +129,13 @@ export const make = Effect.gen(function* () {
     // share history (a fork beside its upstream) can both hold the object.
     if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sha)) {
       for (const member of members) {
+        // A member listed but not cloned here has no commits, as the commit list skips it.
+        if (
+          !(yield* fileSystem
+            .exists(path.join(cwd, member))
+            .pipe(Effect.orElseSucceed(() => false)))
+        )
+          continue;
         const result = yield* git.execute({
           operation: "ReviewService.memberWithCommit",
           cwd: path.join(cwd, member),

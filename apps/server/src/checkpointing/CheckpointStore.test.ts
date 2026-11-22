@@ -742,6 +742,10 @@ it.layer(layerGroupTest)("CheckpointStore.layer for a multi-repo group", (it) =>
       const after = checkpointRefForThreadTurn(threadId, 1);
 
       expect(yield* store.isGitRepository(group)).toBe(true);
+      // A group whose clones are gone is no checkout, though its `.workler` lists them.
+      const emptied = NodePath.join(yield* makeTmpDir(), "group");
+      yield* (yield* FileSystem.FileSystem).makeDirectory(emptied);
+      expect(yield* store.isGitRepository(emptied)).toBe(false);
       yield* store.captureCheckpoint({ cwd: group, checkpointRef: before });
       yield* writeTextFile(NodePath.join(group, "api", "README.md"), "# api\n");
       yield* git(NodePath.join(group, "web"), ["mv", "README.md", "GUIDE.md"]);
