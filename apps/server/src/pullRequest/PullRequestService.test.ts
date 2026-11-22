@@ -2299,6 +2299,65 @@ it.effect("resolves a project's repository identity when its shell has none cach
   }),
 );
 
+it.effect(
+  "reads a member's pull request through its multi-repo project, in the member's folder",
+  () =>
+    Effect.gen(function* () {
+      const seen: Array<{ cwd: string; repository: string }> = [];
+      const identities = {
+        "/shop/api": project({
+          id: "x",
+          title: "api",
+          workspaceRoot: "/shop/api",
+          repository: "acme/api",
+        }),
+        "/shop/web": project({
+          id: "x",
+          title: "web",
+          workspaceRoot: "/shop/web",
+          repository: "acme/web",
+        }),
+      } as Record<string, OrchestrationProjectShell>;
+      const service = yield* makeService({
+        projects: [
+          {
+            ...project({
+              id: "shop",
+              title: "shop",
+              workspaceRoot: "/shop",
+              repository: "acme/api",
+            }),
+            repositoryIdentity: null,
+            multiRepo: {
+              members: [
+                { path: "api", remoteUrl: "https://github.com/acme/api" },
+                { path: "web", remoteUrl: "https://github.com/acme/web" },
+              ],
+            },
+          },
+        ],
+        providers: [
+          fakePullRequestProvider(SourceControlProviderKind.make("github"), {
+            getChangeRequestSummary: (input) =>
+              Effect.sync(() => {
+                seen.push({ cwd: input.cwd, repository: input.repository });
+                return changeRequest(7, "2026-07-02T00:00:00Z");
+              }),
+          }),
+        ],
+        resolveRepositoryIdentity: (cwd) =>
+          Effect.succeed(identities[cwd]?.repositoryIdentity ?? null),
+      });
+
+      yield* service.summary(
+        { projectId: "shop" as ProjectId, host: "github.com", repository: "acme/web", number: 7 },
+        { recoverTransientFailure: false },
+      );
+
+      assert.deepStrictEqual(seen, [{ cwd: "/shop/web", repository: "acme/web" }]);
+    }),
+);
+
 it.effect("routes a hosted reference to another repository through a project on that host", () =>
   Effect.gen(function* () {
     const seen: Array<{ cwd: string; repository: string; host: string }> = [];

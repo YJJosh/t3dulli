@@ -5129,7 +5129,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             const undismisses =
               existing?.source === "stack-dismissed" &&
               command.source !== "stack" &&
-              command.source !== "branch" &&
               command.source !== "stack-dismissed";
             if (existing && !undismisses) return thread;
             const link = existing
@@ -5148,6 +5147,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     repositoryWebUrl: command.repositoryWebUrl,
                   }),
                   source: command.source,
+                  ...(command.member !== undefined && { member: command.member }),
                   linkedAt: DateTime.formatIso(now),
                   snapshot: null,
                   stack: null,
@@ -5179,7 +5179,6 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
             if (!existing) return thread;
             const belongsToStack =
               existing.source === "stack" ||
-              existing.source === "branch" ||
               existing.stack !== null ||
               links.some(
                 (link) =>

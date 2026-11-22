@@ -23,6 +23,7 @@ import * as Option from "effect/Option";
 import * as Schema from "effect/Schema";
 
 import * as GitManager from "../../../git/GitManager.ts";
+import * as MultiRepoWorkspaces from "../../../vcs/MultiRepoWorkspaces.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import * as ProjectService from "../../../project/ProjectService.ts";
 import * as PullRequestWatchService from "../../../pullRequest/PullRequestWatchService.ts";
@@ -276,6 +277,7 @@ const make = Effect.gen(function* () {
 
   const projects = yield* ProjectService.ProjectService;
   const random = yield* SecureRandom.SecureRandom;
+  const multiRepo = yield* Effect.serviceOption(MultiRepoWorkspaces.MultiRepoWorkspaces);
 
   const commandId = (tag: string, threadId: ThreadId) =>
     random.uuidV4().pipe(
@@ -1030,7 +1032,11 @@ const make = Effect.gen(function* () {
           return yield* new PullRequestProjectNotFoundError({ repository: "" });
         }
         const checkout = thread.worktreePath ?? project.workspaceRoot;
-        const members = project.multiRepo?.members.map((member) => member.path) ?? [];
+        // A workspace keeps the members it was made with when the project's list changes.
+        const members =
+          (Option.isSome(multiRepo) ? yield* multiRepo.value.members(checkout) : null) ??
+          project.multiRepo?.members.map((member) => member.path) ??
+          [];
         if (
           members.length > 0 ? !members.includes(input.member ?? "") : input.member !== undefined
         ) {

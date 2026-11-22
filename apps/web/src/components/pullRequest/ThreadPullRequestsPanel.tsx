@@ -70,7 +70,6 @@ const SOURCE_LABELS: Record<ThreadPullRequestLink["source"], string> = {
   created: msg("Created from this thread"),
   agent: msg("Linked by the agent"),
   stack: msg("Found in the stack"),
-  branch: msg("Found on this thread's branch"),
   "stack-dismissed": msg("Dismissed", { $context: "pull request link source" }),
 };
 
@@ -207,7 +206,10 @@ function LinkRowImpl({
                 #{link.number}
               </TooltipTrigger>
               <TooltipPopup>
-                {resolve(SOURCE_LABELS[link.source])} · <RelativeTime timestamp={link.linkedAt} />
+                {link.member === undefined
+                  ? resolve(SOURCE_LABELS[link.source])
+                  : gt("Found on this thread's branch in {member}", { member: link.member })}{" "}
+                · <RelativeTime timestamp={link.linkedAt} />
               </TooltipPopup>
             </Tooltip>
           }
@@ -381,9 +383,7 @@ function LinkRowImpl({
             ) : null}
             <MenuItem onClick={() => onUnlink(link)}>
               <PullRequestGlyph.unlink className="size-3.5" />
-              {link.source === "stack" || link.source === "branch"
-                ? gt("Dismiss from thread")
-                : gt("Unlink from thread")}
+              {link.source === "stack" ? gt("Dismiss from thread") : gt("Unlink from thread")}
             </MenuItem>
           </MenuPopup>
         </Menu>

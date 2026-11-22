@@ -3340,6 +3340,7 @@ export const OrchestrationV2Command = Schema.Union([
     ...ThreadPullRequestKey.fields,
     url: TrimmedNonEmptyString,
     source: ThreadPullRequestLinkSource,
+    member: Schema.optionalKey(TrimmedNonEmptyString),
     repositoryWebUrl: Schema.optional(TrimmedNonEmptyString),
   }),
   Schema.Struct({

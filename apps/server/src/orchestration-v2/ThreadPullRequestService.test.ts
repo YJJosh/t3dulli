@@ -745,12 +745,18 @@ describe("ThreadPullRequestServiceV2 reads", () => {
       expect(
         commands.map((command) => {
           if (command.type !== "thread.pull-request.link") throw new Error(command.type);
-          return [command.threadId, command.repository, command.number, command.source];
+          return [
+            command.threadId,
+            command.repository,
+            command.number,
+            command.source,
+            command.member,
+          ];
         }),
       ).toEqual([
-        ["plain", "acme/api", 3, "branch"],
-        ["dismissed-web", "acme/api", 3, "branch"],
-        ["plain", "acme/web", 7, "branch"],
+        ["plain", "acme/api", 3, "stack", "api"],
+        ["dismissed-web", "acme/api", 3, "stack", "api"],
+        ["plain", "acme/web", 7, "stack", "web"],
       ]);
     }),
   );

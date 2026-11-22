@@ -148,7 +148,8 @@ export const make = Effect.gen(function* () {
     );
 
   // A multi-repo group has no repository of its own: each member may hold a pull request for
-  // the shared branch. They join the thread's links, which the user can dismiss like a stack's.
+  // the shared branch. They join the thread's links as stack members do, so a dismissed one stays
+  // dismissed.
   const discoverGroupPullRequests = Effect.fn("ThreadPullRequestServiceV2.discoverGroup")(
     function* (input: {
       readonly group: ReadonlyArray<
@@ -186,7 +187,9 @@ export const make = Effect.gen(function* () {
             ),
         { concurrency: 4 },
       );
-      for (const { detected, target } of found.filter((entry) => entry !== null)) {
+      for (const [index, entry] of found.entries()) {
+        if (entry === null) continue;
+        const { detected, target } = entry;
         for (const thread of input.group) {
           // Dismissed links stay as tombstones, so a dismissed one is never added back.
           if ((thread.pullRequests ?? []).some((link) => threadPullRequestKeysEqual(link, target)))
@@ -201,7 +204,8 @@ export const make = Effect.gen(function* () {
             repository: target.repository,
             number: target.number,
             url: target.url,
-            source: "branch",
+            source: "stack",
+            member: input.members[index]!,
           });
         }
       }

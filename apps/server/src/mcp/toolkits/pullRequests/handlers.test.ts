@@ -28,6 +28,7 @@ import * as Stream from "effect/Stream";
 import type { Tool } from "effect/ai";
 
 import * as GitManager from "../../../git/GitManager.ts";
+import * as MultiRepoWorkspaces from "../../../vcs/MultiRepoWorkspaces.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import {
   type PullRequestTestThread,
@@ -155,6 +156,8 @@ interface HarnessOptions {
   >;
   readonly pullRequests?: Partial<PullRequestService.PullRequestService["Service"]>;
   readonly git?: Partial<GitManager.GitManager["Service"]>;
+  /** Members a checkout lists in its own `.workler`. */
+  readonly checkoutMembers?: (cwd: string) => ReadonlyArray<string> | null;
 }
 
 const NO_GUIDE: PullRequestReviewGuideResult = { guide: null, run: null, currentHeadSha: "head-1" };
@@ -209,6 +212,9 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
     }),
     Layer.mock(PullRequestService.PullRequestService)(options.pullRequests ?? {}),
     Layer.mock(GitManager.GitManager)(options.git ?? {}),
+    Layer.mock(MultiRepoWorkspaces.MultiRepoWorkspaces)({
+      members: (cwd) => Effect.succeed(options.checkoutMembers?.(cwd) ?? null),
+    }),
     Layer.succeed(SecureRandom.SecureRandom, testCrypto),
     McpToolAccessTestkit.liveThreadsLayer,
   );
@@ -1193,13 +1199,16 @@ describe("source control tools", () => {
         multiRepo: {
           members: [
             { path: "api", remoteUrl: "git@github.com:acme/api.git" },
-            { path: "web", remoteUrl: "git@github.com:acme/web.git" },
+            { path: "docs", remoteUrl: "git@github.com:acme/docs.git" },
           ],
         },
       };
       const harness = yield* makeHarness({
         project: group,
         thread: { ...makeThread([]), worktreePath: "/workspace/group/.worktrees/feature" },
+        // The workspace was made before `web` left the project and `docs` joined it.
+        checkoutMembers: (cwd) =>
+          cwd === "/workspace/group/.worktrees/feature" ? ["api", "web"] : null,
         git: {
           createPullRequest: (input) =>
             Effect.sync(() => opened.push(input.cwd)).pipe(
@@ -1218,13 +1227,17 @@ describe("source control tools", () => {
         .call("pull_request_create", { title: "Add tools", body: "Adds tools." })
         .pipe(Effect.flip);
       expect(String(unnamed)).toContain("Pass member: one of api, web.");
+      const missing = yield* harness
+        .call("pull_request_create", { title: "Add tools", body: "Adds tools.", member: "docs" })
+        .pipe(Effect.flip);
+      expect(String(missing)).toContain("Pass member: one of api, web.");
       const result = yield* harness.call("pull_request_create", {
         title: "Add tools",
         body: "Adds tools.",
-        member: "api",
+        member: "web",
       });
-      expect(result).toMatchObject({ repository: "acme/api", number: 5, created: true });
-      expect(opened).toEqual(["/workspace/group/.worktrees/feature/api"]);
+      expect(result).toMatchObject({ number: 5, created: true });
+      expect(opened).toEqual(["/workspace/group/.worktrees/feature/web"]);
     }),
   );
 

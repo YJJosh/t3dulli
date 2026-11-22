@@ -24,16 +24,12 @@ export const ThreadLinkedPullRequest = Schema.Struct({
 });
 export type ThreadLinkedPullRequest = typeof ThreadLinkedPullRequest.Type;
 
-/**
- * branch is the shared branch's pull request in a multi-repo member. stack-dismissed hides an
- * unlinked stack or branch link and prevents sync from re-adding it.
- */
+/** stack-dismissed hides an unlinked native member and prevents sync from re-adding it. */
 export const ThreadPullRequestLinkSource = Schema.Literals([
   "manual",
   "created",
   "agent",
   "stack",
-  "branch",
   "stack-dismissed",
 ]);
 export type ThreadPullRequestLinkSource = typeof ThreadPullRequestLinkSource.Type;
@@ -137,6 +133,11 @@ export const ThreadPullRequestLink = Schema.Struct({
   /** An actual browser or clone URL; older agent display URLs may be synthesized. */
   repositoryWebUrl: Schema.optional(TrimmedNonEmptyString),
   source: ThreadPullRequestLinkSource,
+  /**
+   * The multi-repo member whose checkout of the thread's branch has it. Such a link is found and
+   * dismissed like a stack member, so older clients that don't know the field still read it.
+   */
+  member: Schema.optionalKey(TrimmedNonEmptyString),
   linkedAt: IsoDateTime,
   snapshot: Schema.NullOr(ThreadPullRequestSnapshot),
   stack: Schema.NullOr(ThreadPullRequestStack),
