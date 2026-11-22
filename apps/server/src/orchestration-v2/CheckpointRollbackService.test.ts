@@ -98,7 +98,10 @@ it.effect.each(["initial", "waiting"])(
       Layer.provide(
         Layer.mergeAll(
           ThreadCommandExecutor.layer,
-          Layer.mock(CheckpointService.CheckpointServiceV2)({ restore }),
+          Layer.mock(CheckpointService.CheckpointServiceV2)({
+            restore,
+            assertRestorable: () => Effect.void,
+          }),
           Layer.mock(EventSink.EventSinkV2)({}),
           IdAllocator.layer,
           Layer.mock(ProjectionStore.ProjectionStoreV2)({
@@ -261,6 +264,9 @@ it.effect.each([
               }),
           }),
           Layer.mock(CheckpointService.CheckpointServiceV2)({
+            assertRestorable: () => Effect.void,
+            // A leftover with an empty `.workler` is no group; only real members make one.
+            isCheckout: () => Effect.succeed(group === true),
             restore: () =>
               Effect.gen(function* () {
                 assert.isTrue(
@@ -457,6 +463,7 @@ it.effect.each([{ restoreFiles: true }, { restoreFiles: false }])(
             }),
             Layer.mock(GitWorkflow.GitWorkflowService)({}),
             Layer.mock(CheckpointService.CheckpointServiceV2)({
+              assertRestorable: () => Effect.void,
               restore: () =>
                 Deferred.succeed(restoreEntered, undefined).pipe(
                   Effect.andThen(Deferred.await(releaseRestore)),
@@ -750,6 +757,7 @@ const seedRollbackHistory = Effect.gen(function* () {
         ThreadCommandExecutor.layer,
         IdAllocator.layer,
         Layer.mock(CheckpointService.CheckpointServiceV2)({
+          assertRestorable: () => Effect.void,
           restore: ({ checkpoint }) =>
             Effect.sync(() => {
               restored.push(checkpoint.id);

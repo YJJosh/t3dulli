@@ -1,4 +1,4 @@
-import { type CheckpointRef } from "@t3tools/contracts";
+import { CheckpointRef } from "@t3tools/contracts";
 import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
 import * as Duration from "effect/Duration";
@@ -18,6 +18,11 @@ export interface CaptureCheckpointInput {
   readonly checkpointRef: CheckpointRef;
   /** The checkpoint this one follows, so a turn that switched branches starts where it landed. */
   readonly previousCheckpointRef?: CheckpointRef;
+  /**
+   * Multi-repo groups: keep the ref in members that have it, so a baseline taken again after a
+   * member joined does not rewrite what the others recorded.
+   */
+  readonly onlyMissing?: boolean;
 }
 
 export interface RestoreCheckpointInput {
@@ -60,7 +65,16 @@ export class CheckpointStore extends Context.Service<
       input: CaptureCheckpointInput,
     ) => Effect.Effect<void, CheckpointStoreError>;
 
+    /** In a multi-repo group, whether every member has the ref. */
     readonly hasCheckpointRef: (
+      input: Omit<RestoreCheckpointInput, "fallbackToHead">,
+    ) => Effect.Effect<boolean, CheckpointStoreError>;
+
+    /**
+     * Whether `restoreCheckpoint` can restore the ref. A multi-repo group needs it in one member:
+     * members that joined after the checkpoint keep their files.
+     */
+    readonly canRestoreCheckpoint: (
       input: Omit<RestoreCheckpointInput, "fallbackToHead">,
     ) => Effect.Effect<boolean, CheckpointStoreError>;
 
@@ -164,9 +178,22 @@ export const make = Effect.gen(function* () {
       return yield* checkpoints.captureCheckpoint(input);
     }
     // Every member gets the same ref; `hasCheckpointRef` needs all of them before it counts.
+    const { onlyMissing, ...capture } = input;
     yield* Effect.forEach(
       members,
-      (member) => member.checkpoints.captureCheckpoint({ ...input, cwd: member.cwd }),
+      (member) =>
+        Effect.gen(function* () {
+          if (
+            onlyMissing === true &&
+            (yield* member.checkpoints.hasCheckpointRef({
+              cwd: member.cwd,
+              checkpointRef: input.checkpointRef,
+            }))
+          ) {
+            return;
+          }
+          yield* member.checkpoints.captureCheckpoint({ ...capture, cwd: member.cwd });
+        }),
       { concurrency: MEMBER_CONCURRENCY, discard: true },
     );
   });
@@ -188,6 +215,25 @@ export const make = Effect.gen(function* () {
     return found.every(Boolean);
   });
 
+  /** The members that hold `checkpointRef`; a member that joined later has none. */
+  const membersWithRef = (members: ReadonlyArray<Member>, checkpointRef: CheckpointRef) =>
+    Effect.filter(
+      members,
+      (member) => member.checkpoints.hasCheckpointRef({ cwd: member.cwd, checkpointRef }),
+      { concurrency: MEMBER_CONCURRENCY },
+    );
+
+  const canRestoreCheckpoint: CheckpointStore["Service"]["canRestoreCheckpoint"] = Effect.fn(
+    "canRestoreCheckpoint",
+  )(function* (input) {
+    const members = yield* resolveMembers(input.cwd);
+    if (members === null) {
+      const checkpoints = yield* resolveCheckpoints(input.cwd);
+      return yield* checkpoints.hasCheckpointRef(input);
+    }
+    return (yield* membersWithRef(members, input.checkpointRef)).length > 0;
+  });
+
   const restoreCheckpoint: CheckpointStore["Service"]["restoreCheckpoint"] = Effect.fn(
     "restoreCheckpoint",
   )(function* (input) {
@@ -196,20 +242,58 @@ export const make = Effect.gen(function* () {
       const checkpoints = yield* resolveCheckpoints(input.cwd);
       return yield* checkpoints.restoreCheckpoint(input);
     }
-    // Check every member first, so a missing ref never leaves the group half restored.
-    if (
-      input.fallbackToHead !== true &&
-      !(yield* hasCheckpointRef({ cwd: input.cwd, checkpointRef: input.checkpointRef }))
-    ) {
-      return false;
-    }
-    let restored = members.length > 0;
-    for (const member of members) {
-      if (!(yield* member.checkpoints.restoreCheckpoint({ ...input, cwd: member.cwd }))) {
-        restored = false;
-      }
-    }
-    return restored;
+    const targets =
+      input.fallbackToHead === true ? members : yield* membersWithRef(members, input.checkpointRef);
+    if (targets.length === 0) return false;
+    // Each member's files are saved first, so a member that fails puts the others back.
+    const undoRef = CheckpointRef.make(`${input.checkpointRef}-restore-undo`);
+    yield* Effect.forEach(
+      targets,
+      (member) => member.checkpoints.captureCheckpoint({ cwd: member.cwd, checkpointRef: undoRef }),
+      { concurrency: MEMBER_CONCURRENCY, discard: true },
+    );
+    // The member that failed may have written part of its files too.
+    const undo = Effect.forEach(
+      targets,
+      (member) =>
+        member.checkpoints
+          .restoreCheckpoint({ cwd: member.cwd, checkpointRef: undoRef, fallbackToHead: false })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Could not put a multi-repo member back after a failed restore", {
+                cwd: member.cwd,
+                detail: error.message,
+              }),
+            ),
+          ),
+      { discard: true },
+    );
+    const outcome = yield* Effect.forEach(
+      targets,
+      (member) =>
+        member.checkpoints
+          .restoreCheckpoint({ ...input, cwd: member.cwd })
+          .pipe(Effect.flatMap((ok) => (ok ? Effect.void : Effect.fail("unavailable" as const)))),
+      { discard: true },
+    ).pipe(
+      Effect.as(true),
+      Effect.catch((failure) =>
+        undo.pipe(
+          Effect.andThen(failure === "unavailable" ? Effect.succeed(false) : Effect.fail(failure)),
+        ),
+      ),
+      Effect.ensuring(
+        Effect.forEach(
+          targets,
+          (member) =>
+            member.checkpoints
+              .deleteCheckpointRefs({ cwd: member.cwd, checkpointRefs: [undoRef] })
+              .pipe(Effect.ignore),
+          { discard: true },
+        ),
+      ),
+    );
+    return outcome;
   });
 
   /** Splits group paths by member; null keeps every path of every member. */
@@ -329,6 +413,7 @@ export const make = Effect.gen(function* () {
     isGitRepository,
     captureCheckpoint,
     hasCheckpointRef,
+    canRestoreCheckpoint,
     restoreCheckpoint,
     diffCheckpoints,
     listAuthoredPaths,

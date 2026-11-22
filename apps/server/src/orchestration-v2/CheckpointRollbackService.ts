@@ -246,7 +246,10 @@ export const layer: Layer.Layer<
           restoreFiles &&
           (yield* fileSystem.exists(worktreePath)) &&
           !(yield* fileSystem.exists(path.join(worktreePath, ".git"))) &&
-          !(yield* fileSystem.exists(path.join(worktreePath, WORKLER_CONFIG_FILE)));
+          !(
+            (yield* fileSystem.exists(path.join(worktreePath, WORKLER_CONFIG_FILE))) &&
+            (yield* checkpoints.isCheckout(worktreePath))
+          );
         if (leftover || !(yield* fileSystem.exists(worktreePath))) {
           const project = yield* projects.get(context.thread.projectId);
           if (
@@ -335,6 +338,8 @@ export const layer: Layer.Layer<
           (turn.runAttemptId === null || !rolledBackAttemptIds.has(turn.runAttemptId)),
       );
 
+      // The conversation is rewound first, so a restore that cannot happen must stop it.
+      if (input.restoreFiles !== false) yield* checkpoints.assertRestorable({ scope, checkpoint });
       const snapshot =
         runsToRollback.length === 0
           ? { providerThread }

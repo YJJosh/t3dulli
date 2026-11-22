@@ -373,10 +373,14 @@ it.layer(TestLayer)("MultiRepoWorkspaces", (it) => {
         .pipe(Effect.flip);
       assert.include(missing.detail, "feature/login");
       assert.isFalse(yield* fileSystem.exists(workspace));
+      const checkpoint = "refs/t3/orchestration-v2/checkpoints/scope/ordinal/0";
       for (const member of ["api", "web"]) {
         yield* git(path.join(group, member), ["branch", "feature/login"]);
+        // Where removing the workspace copied its checkpoints.
+        yield* git(path.join(group, member), ["update-ref", checkpoint, "HEAD"]);
       }
-      // A thread whose workspace vanished gets the same folder back on its branch.
+      // A thread whose workspace vanished gets the same folder back on its branch, with the
+      // checkpoints Edit from here restores.
       const recreated = yield* workspaces.createWorkspace({
         cwd: group,
         refName: "feature/login",
@@ -384,6 +388,9 @@ it.layer(TestLayer)("MultiRepoWorkspaces", (it) => {
       });
       assert.equal(recreated.worktree.path, workspace);
       assert.deepEqual(yield* currentBranches(workspace), ["feature/login", "feature/login"]);
+      for (const member of ["api", "web"]) {
+        yield* git(path.join(workspace, member), ["rev-parse", "--verify", checkpoint]);
+      }
     }).pipe(Effect.scoped),
   );
 

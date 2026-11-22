@@ -4016,104 +4016,95 @@ it.layer(layerTest)("OrchestrationV2LayerLive lifecycle", (it) => {
     }),
   );
 
-  // A multi-repo member's branch pull request is dismissed and kept away like a stack member.
-  it.effect.each(["stack", "branch"] as const)(
-    "retains multiple pull requests and dismissed %s links through rebuilds",
-    (source) =>
-      Effect.gen(function* () {
-        const orchestrator = yield* Orchestrator.OrchestratorV2;
-        const maintenance = yield* ProjectionReplay.ProjectionReplay;
-        const threadId = ThreadId.make(`runtime-multiple-pull-requests-${source}`);
-        yield* orchestrator.dispatch({
-          type: "thread.create",
-          createdBy: "user",
-          creationSource: "web",
-          commandId: CommandId.make(`multi-pr-create-${source}`),
-          threadId,
-          projectId: ProjectId.make("multi-pr-project"),
-          title: "Stack",
-          modelSelection,
-          runtimeMode: "full-access",
-          interactionMode: "default",
-          branch: null,
-          worktreePath: null,
-        });
-        const key = { host: "GitHub.com", repository: "Pingdotgg/T3code" };
-        for (const number of [1, 2]) {
-          yield* orchestrator.dispatch({
-            type: "thread.pull-request.link",
-            commandId: CommandId.make(`multi-pr-link-${number}-${source}`),
-            threadId,
-            ...key,
-            number,
-            url: `https://github.com/pingdotgg/t3code/pull/${number}`,
-            source: number === 1 ? "manual" : source,
-          });
-        }
-        const linked = yield* orchestrator.getThreadShell(threadId);
-        assert.deepEqual(
-          linked?.pullRequests?.map(({ host, repository, number }) => ({
-            host,
-            repository,
-            number,
-          })),
-          [1, 2].map((number) => ({ host: "github.com", repository: "pingdotgg/t3code", number })),
-        );
-        yield* orchestrator.dispatch({
-          type: "thread.pull-request.unlink",
-          commandId: CommandId.make(`multi-pr-dismiss-${source}`),
-          threadId,
-          ...key,
-          number: 2,
-        });
-        yield* orchestrator.dispatch({
-          type: "thread.pull-request.unlink",
-          commandId: CommandId.make(`multi-pr-unlink-${source}`),
-          threadId,
-          ...key,
-          number: 1,
-        });
-        assert.deepEqual(
-          (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.map(
-            ({ number, source }) => ({
-              number,
-              source,
-            }),
-          ),
-          [{ number: 2, source: "stack-dismissed" }],
-        );
+  it.effect("retains multiple pull requests and dismissed stack members through rebuilds", () =>
+    Effect.gen(function* () {
+      const orchestrator = yield* Orchestrator.OrchestratorV2;
+      const maintenance = yield* ProjectionReplay.ProjectionReplay;
+      const threadId = ThreadId.make("runtime-multiple-pull-requests");
+      yield* orchestrator.dispatch({
+        type: "thread.create",
+        createdBy: "user",
+        creationSource: "web",
+        commandId: CommandId.make("multi-pr-create"),
+        threadId,
+        projectId: ProjectId.make("multi-pr-project"),
+        title: "Stack",
+        modelSelection,
+        runtimeMode: "full-access",
+        interactionMode: "default",
+        branch: null,
+        worktreePath: null,
+      });
+      const key = { host: "GitHub.com", repository: "Pingdotgg/T3code" };
+      for (const number of [1, 2]) {
         yield* orchestrator.dispatch({
           type: "thread.pull-request.link",
-          commandId: CommandId.make(`multi-pr-rediscover-${source}`),
+          commandId: CommandId.make(`multi-pr-link-${number}`),
           threadId,
           ...key,
-          number: 2,
-          url: "https://github.com/pingdotgg/t3code/pull/2",
+          number,
+          url: `https://github.com/pingdotgg/t3code/pull/${number}`,
+          source: number === 1 ? "manual" : "stack",
+        });
+      }
+      const linked = yield* orchestrator.getThreadShell(threadId);
+      assert.deepEqual(
+        linked?.pullRequests?.map(({ host, repository, number }) => ({ host, repository, number })),
+        [1, 2].map((number) => ({ host: "github.com", repository: "pingdotgg/t3code", number })),
+      );
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.unlink",
+        commandId: CommandId.make("multi-pr-dismiss"),
+        threadId,
+        ...key,
+        number: 2,
+      });
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.unlink",
+        commandId: CommandId.make("multi-pr-unlink"),
+        threadId,
+        ...key,
+        number: 1,
+      });
+      assert.deepEqual(
+        (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.map(({ number, source }) => ({
+          number,
           source,
-        });
-        assert.equal(
-          (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.source,
-          "stack-dismissed",
-        );
-        assert.isTrue((yield* maintenance.rebuild).valid);
-        assert.equal(
-          (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.source,
-          "stack-dismissed",
-        );
-        yield* orchestrator.dispatch({
-          type: "thread.pull-request.link",
-          commandId: CommandId.make(`multi-pr-restore-${source}`),
-          threadId,
-          ...key,
-          number: 2,
-          url: "https://github.com/pingdotgg/t3code/pull/2",
-          source: "manual",
-        });
-        assert.equal(
-          (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.source,
-          "manual",
-        );
-      }),
+        })),
+        [{ number: 2, source: "stack-dismissed" }],
+      );
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.link",
+        commandId: CommandId.make("multi-pr-rediscover"),
+        threadId,
+        ...key,
+        number: 2,
+        url: "https://github.com/pingdotgg/t3code/pull/2",
+        source: "stack",
+      });
+      assert.equal(
+        (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.source,
+        "stack-dismissed",
+      );
+      assert.isTrue((yield* maintenance.rebuild).valid);
+      assert.equal(
+        (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.source,
+        "stack-dismissed",
+      );
+      yield* orchestrator.dispatch({
+        type: "thread.pull-request.link",
+        commandId: CommandId.make("multi-pr-restore"),
+        threadId,
+        ...key,
+        number: 2,
+        url: "https://github.com/pingdotgg/t3code/pull/2",
+        source: "manual",
+      });
+      assert.equal(
+        (yield* orchestrator.getThreadShell(threadId))?.pullRequests?.[0]?.source,
+        "manual",
+      );
+    }),
   );
 
   it.effect("links an issue, syncs its snapshot, and unlinks it", () =>

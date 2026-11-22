@@ -549,6 +549,31 @@ export const make = Effect.gen(function* () {
         git,
         options,
       });
+      // Removing a workspace copies its checkpoints into the group's repositories, and a
+      // clone takes only branches and tags: a recreated one needs them back to restore.
+      if (input.newRefName === undefined) {
+        yield* git
+          .execute({
+            operation: "MultiRepoWorkspaces.createWorkspace.checkpoints",
+            cwd: path.join(created.path, member),
+            args: [
+              "fetch",
+              "--no-tags",
+              "--no-write-fetch-head",
+              path.join(root, member),
+              "+refs/t3/checkpoints/*:refs/t3/checkpoints/*",
+              "+refs/t3/orchestration-v2/checkpoints/*:refs/t3/orchestration-v2/checkpoints/*",
+            ],
+          })
+          .pipe(
+            Effect.catch((error) =>
+              Effect.logWarning("Could not copy checkpoints into a recreated multi-repo member", {
+                member,
+                detail: error.detail,
+              }),
+            ),
+          );
+      }
     }
     return { worktree: { path: created.path, refName: created.branch ?? branch } };
   });
