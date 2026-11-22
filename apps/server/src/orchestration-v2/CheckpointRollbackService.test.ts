@@ -178,9 +178,11 @@ it.effect.each([
   { order: "cleanup-first", restoreFiles: false, leavesFolder: true },
   { order: "cleanup-first", restoreFiles: true, leavesFolder: true, shared: true },
   { order: "cleanup-first", restoreFiles: true, leavesFolder: true, createFails: true },
+  // A multi-repo workspace has no `.git` of its own; it is a checkout, not a leftover.
+  { order: "cleanup-first", restoreFiles: true, leavesFolder: true, group: true },
 ])("locks rollback with %s", (row) =>
   Effect.gen(function* () {
-    const { order, restoreFiles, unmanaged, leavesFolder, shared, createFails } = row;
+    const { order, restoreFiles, unmanaged, leavesFolder, shared, createFails, group } = row;
     const fileSystem = yield* FileSystem.FileSystem;
     const path = yield* Path.Path;
     const workspaceRoot = yield* fileSystem.realPath(
@@ -262,7 +264,9 @@ it.effect.each([
             restore: () =>
               Effect.gen(function* () {
                 assert.isTrue(
-                  yield* fileSystem.exists(path.join(worktreePath, ".git")).pipe(Effect.orDie),
+                  yield* fileSystem
+                    .exists(path.join(worktreePath, group ? ".workler" : ".git"))
+                    .pipe(Effect.orDie),
                 );
                 calls.push("files");
               }),
@@ -335,6 +339,7 @@ it.effect.each([
           if (leavesFolder) {
             yield* fileSystem.makeDirectory(worktreePath);
             yield* fileSystem.writeFileString(path.join(worktreePath, "unsaved.txt"), "keep");
+            if (group) yield* fileSystem.writeFileString(path.join(worktreePath, ".workler"), "");
           }
           calls.push("cleanup");
         }),
@@ -380,7 +385,7 @@ it.effect.each([
       const rollbackCalls = restoreFiles
         ? ["session", "files", "projection"]
         : ["session", "projection"];
-      const recreates = !leavesFolder || restoreFiles;
+      const recreates = !leavesFolder || (restoreFiles && !group);
       assert.deepEqual(
         calls,
         order === "cleanup-first"
