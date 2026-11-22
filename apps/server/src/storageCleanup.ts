@@ -1263,7 +1263,11 @@ const make = Effect.gen(function* () {
         path.dirname(path.dirname(worktreePath)),
         MultiRepoWorkspaces.WORKLER_CONFIG_FILE,
       );
-      if ((yield* fs.readFileString(configPath)) !== (yield* fs.readFileString(originalConfig)))
+      // A workspace keeps the members it was made with when the group's list changes later.
+      if (
+        MultiRepoWorkspaces.withoutProjectLines(yield* fs.readFileString(configPath)) !==
+        MultiRepoWorkspaces.withoutProjectLines(yield* fs.readFileString(originalConfig))
+      )
         return false;
       const memberSegments = members.map((member) => member.split(/[\\/]/));
       const startsWith = (member: ReadonlyArray<string>, prefix: ReadonlyArray<string>) =>

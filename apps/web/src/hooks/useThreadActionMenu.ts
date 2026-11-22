@@ -38,8 +38,11 @@ import {
   useProjects,
 } from "../state/entities";
 import { readEnvironments, usePrimaryEnvironmentId } from "../state/environments";
-import { openCommandPalette } from "../commandPaletteBus";
-import { buildMultiRepoProjectSetupMenu, isMultiRepoSetupMenuId } from "../multiRepoSetupMenu";
+import {
+  buildMultiRepoProjectSetupMenu,
+  isMultiRepoSetupMenuId,
+  runMultiRepoSetupMenuAction,
+} from "../multiRepoSetupMenu";
 import { readCanSetUpMultiRepoProject } from "./useMultiRepoSetupTargets";
 import { readLocalApi } from "../localApi";
 import { configuredHostedAppUrl } from "../hostedPairing";
@@ -193,8 +196,7 @@ export function useThreadActionMenu(input: {
       const clicked = await settlePromise(() => api.contextMenu.show(items, position));
       if (clicked._tag === "Failure" || clicked.value === null) return;
       if (isMultiRepoSetupMenuId(clicked.value)) {
-        const multiRepoSetup = setupMenu.setupsByAction.get(clicked.value);
-        if (multiRepoSetup) openCommandPalette({ multiRepoSetup });
+        runMultiRepoSetupMenuAction(setupMenu, clicked.value);
         return;
       }
       const action: ThreadActionMenuId = clicked.value;

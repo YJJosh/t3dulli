@@ -1,10 +1,11 @@
-import type { EnvironmentId } from "@t3tools/contracts";
+import type { EnvironmentId, ProjectId } from "@t3tools/contracts";
 import { formatDiffCount } from "@t3tools/client-runtime/diff-count";
 import { summarizeMultiRepoStatus } from "@t3tools/client-runtime/state/multi-repo-status";
 import { T, useGT } from "gt-react";
-import { FolderGitIcon, GitBranchIcon } from "lucide-react";
+import { FolderGitIcon, FolderPlusIcon, GitBranchIcon } from "lucide-react";
 
 import { cn } from "~/lib/utils";
+import { openMultiRepoMembers } from "../MultiRepoMembersDialog";
 import { useEnvironmentQuery } from "~/state/query";
 import { reviewEnvironment } from "~/state/review";
 import { revisionedQuery } from "~/state/revisionedQuery";
@@ -20,6 +21,7 @@ import {
  */
 export function MultiRepoStatusRows(props: {
   environmentId: EnvironmentId;
+  projectId: ProjectId;
   cwd: string;
   members: ReadonlyArray<string>;
   workspaceMutationId: string | null;
@@ -80,6 +82,21 @@ export function MultiRepoStatusRows(props: {
             </ThreadDetailsControl>
           ))
         : null}
+      {props.showChanges ? (
+        <ThreadDetailsControl
+          type="button"
+          variant="ghost"
+          size="sm"
+          part="row"
+          tone="muted"
+          onClick={() =>
+            openMultiRepoMembers({ environmentId: props.environmentId, projectId: props.projectId })
+          }
+        >
+          <FolderPlusIcon className={THREAD_DETAILS_PANEL_ICON_CLASS} aria-hidden />
+          <T>Manage repositories</T>
+        </ThreadDetailsControl>
+      ) : null}
     </>
   );
 }

@@ -5,7 +5,9 @@ import {
   ProjectId,
   type Project,
   type ProjectCreatePayload,
+  type GitCommandError,
   type ProjectInspectMultiRepoFolderResult,
+  type ProjectMultiRepoMembersResult,
   type ProjectUpdatePayload,
   type ProjectSnapshot,
   type ThreadId,
@@ -140,6 +142,18 @@ export class ProjectService extends Context.Service<
     readonly inspectMultiRepoFolder: (
       path: string,
     ) => Effect.Effect<ProjectInspectMultiRepoFolderResult, ProjectServiceError>;
+    /** A multi-repo project's members and the repositories in its folder it does not list. */
+    readonly multiRepoMembers: (
+      projectId: ProjectId,
+    ) => Effect.Effect<ProjectMultiRepoMembersResult, ProjectServiceError>;
+    readonly addMultiRepoMember: (
+      projectId: ProjectId,
+      member: string,
+    ) => Effect.Effect<ProjectMultiRepoMembersResult, ProjectServiceError>;
+    readonly removeMultiRepoMember: (
+      projectId: ProjectId,
+      member: string,
+    ) => Effect.Effect<ProjectMultiRepoMembersResult, ProjectServiceError>;
     readonly create: (input: ProjectCreateInput) => Effect.Effect<Project, ProjectServiceError>;
     readonly bootstrap: (
       input: ProjectBootstrapInput,
@@ -720,6 +734,65 @@ export const make = Effect.gen(function* () {
     yield* projectEnrichment.request(project.value.workspaceRoot);
     return { members };
   });
+  const requireGroup = Effect.fn("ProjectService.requireGroup")(function* (projectId: ProjectId) {
+    const project = yield* getById(projectId);
+    if (Option.isNone(project)) return yield* new ProjectNotFoundError({ projectId });
+    const service = yield* requireMultiRepo;
+    const members = yield* service.members(project.value.workspaceRoot);
+    if (members === null) {
+      return yield* new ProjectInvalidError({
+        projectId,
+        detail: "This is not a multi-repo project.",
+      });
+    }
+    return { root: project.value.workspaceRoot, service, members };
+  });
+  const describeMembers = Effect.fn("ProjectService.describeMembers")(function* (
+    group: {
+      readonly root: string;
+      readonly service: MultiRepoWorkspaces.MultiRepoWorkspaces["Service"];
+    },
+    members: ReadonlyArray<string>,
+  ) {
+    return {
+      members,
+      candidates: yield* group.service.undeclaredRepositories(group.root, members),
+    };
+  });
+  const multiRepoMembers = Effect.fn("ProjectService.multiRepoMembers")(function* (
+    projectId: ProjectId,
+  ) {
+    const group = yield* requireGroup(projectId);
+    return yield* describeMembers(group, group.members);
+  });
+  const changeMultiRepoMembers = (
+    operation: string,
+    change: (
+      service: MultiRepoWorkspaces.MultiRepoWorkspaces["Service"],
+      root: string,
+    ) => Effect.Effect<ReadonlyArray<string>, GitCommandError>,
+  ) =>
+    Effect.fn(operation)(function* (projectId: ProjectId) {
+      const group = yield* requireGroup(projectId);
+      const members = yield* change(group.service, group.root).pipe(
+        Effect.mapError((cause) => new ProjectInvalidError({ projectId, detail: cause.detail })),
+      );
+      // Snapshots carry the member list, so every client sees the change.
+      yield* projectEnrichment.invalidate([group.root]);
+      yield* projectEnrichment.request(group.root);
+      return yield* describeMembers(group, members);
+    });
+  const addMultiRepoMember: ProjectService["Service"]["addMultiRepoMember"] = (projectId, member) =>
+    changeMultiRepoMembers("ProjectService.addMultiRepoMember", (service, root) =>
+      service.addMember(root, member),
+    )(projectId);
+  const removeMultiRepoMember: ProjectService["Service"]["removeMultiRepoMember"] = (
+    projectId,
+    member,
+  ) =>
+    changeMultiRepoMembers("ProjectService.removeMultiRepoMember", (service, root) =>
+      service.removeMember(root, member),
+    )(projectId);
   const inspectMultiRepoFolder = Effect.fn("ProjectService.inspectMultiRepoFolder")(function* (
     folder: string,
   ) {
@@ -728,6 +801,9 @@ export const make = Effect.gen(function* () {
   return ProjectService.of({
     makeMultiRepo,
     inspectMultiRepoFolder,
+    multiRepoMembers,
+    addMultiRepoMember,
+    removeMultiRepoMember,
     create,
     bootstrap,
     update,

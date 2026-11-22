@@ -15,6 +15,7 @@ import {
   ProjectCreatePayload,
   ProjectUpdatePayload,
   ProjectId,
+  ProjectMultiRepoMembersResult,
   OrchestratorMcpClientRequestId,
   OrchestratorMcpEnvironmentTarget,
   OrchestratorMcpFailure,
@@ -127,6 +128,18 @@ const ProjectCloneTool = Tool.make("t3_project_clone", {
 })
   .annotate(Tool.Destructive, true)
   .annotate(Tool.OpenWorld, true);
+const ProjectRepositoriesTool = Tool.make("t3_project_repositories", {
+  ...shared,
+  description:
+    "List a multi-repo project's repositories, or add or remove one. `add` takes a repository already in the project folder (clone one there first with `t3_project_clone`). `remove` keeps its folder.",
+  parameters: Schema.Struct({
+    environmentId: OrchestratorMcpEnvironmentTarget,
+    projectId: ProjectId,
+    add: Schema.optionalKey(TrimmedNonEmptyString),
+    remove: Schema.optionalKey(TrimmedNonEmptyString),
+  }),
+  success: ProjectMultiRepoMembersResult,
+}).annotate(Tool.Destructive, true);
 const ThreadLaunchTool = Tool.make("t3_thread_launch", {
   ...shared,
   description:
@@ -192,4 +205,5 @@ export const ProjectToolkit = Toolkit.make(
   ProjectUpdateTool,
   ProjectDeleteTool,
   ProjectCloneTool,
+  ProjectRepositoriesTool,
 );

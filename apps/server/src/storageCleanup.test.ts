@@ -4107,6 +4107,23 @@ describe("Workler cleanup safety on v2 threads", () => {
       ),
   );
 
+  it.live("removes a group workspace made before the group's members changed", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const { service, repo, worktree, fs } = yield* cleanupFixture(
+          undefined,
+          undefined,
+          "group",
+        );
+        // The workspace still lists api and web; the group now lists only api.
+        yield* fs.writeFileString(`${repo}/.workler`, "project api\n");
+        yield* service.runNow;
+        expect(yield* fs.exists(worktree)).toBe(false);
+        expect(yield* fs.exists(`${repo}/web/tracked.txt`)).toBe(true);
+      }),
+    ),
+  );
+
   it.live("keeps a group with extra root files or an edited .workler", () =>
     runCleanupTest(
       Effect.gen(function* () {

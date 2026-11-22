@@ -37,6 +37,13 @@ import * as WorklerWorkspaceService from "./WorklerWorkspaceService.ts";
 
 export const WORKLER_CONFIG_FILE = ".workler";
 export const WORKSPACES_DIR = ".worktrees";
+
+/** A `.workler` file without its `project` lines, as Workler compares a workspace's copy. */
+export const withoutProjectLines = (config: string) =>
+  config
+    .split(/\r?\n/)
+    .filter((line) => !/^\s*project(\s|$)/.test(line))
+    .join("\n");
 const MAX_WORKSPACE_NAME_ATTEMPTS = 100;
 
 /**
@@ -61,6 +68,21 @@ export class MultiRepoWorkspaces extends Context.Service<
     readonly nestedRepositories: (cwd: string) => Effect.Effect<ReadonlyArray<string>>;
     /** Makes the plain folder `cwd` a project group of the repositories inside it; returns its members. */
     readonly makeGroup: (cwd: string) => Effect.Effect<ReadonlyArray<string>, GitCommandError>;
+    /** Repositories inside the group at `root` that its `.workler` does not list. */
+    readonly undeclaredRepositories: (
+      root: string,
+      members: ReadonlyArray<string>,
+    ) => Effect.Effect<ReadonlyArray<string>>;
+    /** Lists the repository at `root/member` in the group; returns the members. */
+    readonly addMember: (
+      root: string,
+      member: string,
+    ) => Effect.Effect<ReadonlyArray<string>, GitCommandError>;
+    /** Stops listing `member` in the group at `root`; its folder stays. Returns the members. */
+    readonly removeMember: (
+      root: string,
+      member: string,
+    ) => Effect.Effect<ReadonlyArray<string>, GitCommandError>;
     /**
      * What a folder picked for a new multi-repo project holds: repositories to
      * group, room to clone repositories into, or neither. Writes nothing.
@@ -275,6 +297,55 @@ export const make = Effect.gen(function* () {
       );
     return group.projects;
   });
+
+  // Overlapping paths can't share a `.workler`, compared case-insensitively as Workler does.
+  const overlaps = (left: string, right: string) => {
+    const [shorter, longer] = [left, right]
+      .map((value) => value.toLowerCase().split("/"))
+      .toSorted((a, b) => a.length - b.length);
+    return shorter!.every((part, index) => longer![index] === part);
+  };
+
+  const undeclaredRepositories: MultiRepoWorkspaces["Service"]["undeclaredRepositories"] =
+    Effect.fn("MultiRepoWorkspaces.undeclaredRepositories")(function* (root, memberPaths) {
+      const found = yield* findRepositories(root, "", 1);
+      return found.filter(
+        (candidate) => !memberPaths.some((member) => overlaps(candidate, member)),
+      );
+    });
+
+  const changeMembers = (
+    operation: string,
+    root: string,
+    change: Effect.Effect<
+      { readonly projects: ReadonlyArray<string> },
+      WorklerWorkspaceService.WorklerWorkspaceError
+    >,
+  ) =>
+    change.pipe(
+      Effect.map((group) => group.projects),
+      Effect.mapError((error) => mapWorklerError(operation, root, error)),
+    );
+
+  const addMember: MultiRepoWorkspaces["Service"]["addMember"] = Effect.fn(
+    "MultiRepoWorkspaces.addMember",
+  )((root, member) =>
+    changeMembers(
+      "MultiRepoWorkspaces.addMember",
+      root,
+      workler.addGroupProject(path.resolve(root), member),
+    ),
+  );
+
+  const removeMember: MultiRepoWorkspaces["Service"]["removeMember"] = Effect.fn(
+    "MultiRepoWorkspaces.removeMember",
+  )((root, member) =>
+    changeMembers(
+      "MultiRepoWorkspaces.removeMember",
+      root,
+      workler.removeGroupProject(path.resolve(root), member),
+    ),
+  );
 
   const inspectFolder: MultiRepoWorkspaces["Service"]["inspectFolder"] = Effect.fn(
     "MultiRepoWorkspaces.inspectFolder",
@@ -673,6 +744,9 @@ export const make = Effect.gen(function* () {
   });
 
   return MultiRepoWorkspaces.of({
+    undeclaredRepositories,
+    addMember,
+    removeMember,
     listLocalBranchNames,
     members,
     nestedRepositories,

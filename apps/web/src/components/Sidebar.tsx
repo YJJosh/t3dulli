@@ -134,7 +134,11 @@ import { useOrderWhileOpen } from "../hooks/useOrderWhileOpen";
 import { useProjectPin } from "../hooks/useProjectGroupUpdate";
 import { useSidebarProjectGroups } from "../hooks/useSidebarProjectGroups";
 import { isCommandPaletteOpen, openCommandPalette } from "../commandPaletteBus";
-import { buildMultiRepoProjectSetupMenu, isMultiRepoSetupMenuId } from "../multiRepoSetupMenu";
+import {
+  buildMultiRepoProjectSetupMenu,
+  isMultiRepoSetupMenuId,
+  runMultiRepoSetupMenuAction,
+} from "../multiRepoSetupMenu";
 import { readCanSetUpMultiRepoProject } from "../hooks/useMultiRepoSetupTargets";
 import { registerSettleAndAdvance } from "../settleAndAdvance";
 import { startNewThreadFromContext } from "../lib/chatThreadActions";
@@ -1302,10 +1306,8 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
           ),
         );
         if (clicked._tag === "Failure") return;
-        const multiRepoSetup = isMultiRepoSetupMenuId(clicked.value)
-          ? setupMenu.setupsByAction.get(clicked.value)
-          : undefined;
-        if (multiRepoSetup) openCommandPalette({ multiRepoSetup });
+        if (isMultiRepoSetupMenuId(clicked.value))
+          runMultiRepoSetupMenuAction(setupMenu, clicked.value);
         else if (clicked.value === "project-settings") openProjectSettings(projectGroup);
       })();
     },
@@ -1345,8 +1347,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         );
         if (clicked._tag === "Failure") return;
         if (isMultiRepoSetupMenuId(clicked.value)) {
-          const multiRepoSetup = setupMenu.setupsByAction.get(clicked.value);
-          if (multiRepoSetup) openCommandPalette({ multiRepoSetup });
+          runMultiRepoSetupMenuAction(setupMenu, clicked.value);
           return;
         }
         switch (clicked.value) {
@@ -2764,8 +2765,7 @@ export default function Sidebar({ routeReveal }: { routeReveal: SidebarRouteReve
         );
         if (clicked._tag === "Failure" || clicked.value === null) return;
         if (isMultiRepoSetupMenuId(clicked.value)) {
-          const multiRepoSetup = setupMenu.setupsByAction.get(clicked.value);
-          if (multiRepoSetup) openCommandPalette({ multiRepoSetup });
+          runMultiRepoSetupMenuAction(setupMenu, clicked.value);
           return;
         }
         if (threadActionRequiresOperate(clicked.value) && !checkThreadOperations([thread])) return;

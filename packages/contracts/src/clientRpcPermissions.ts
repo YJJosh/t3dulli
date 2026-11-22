@@ -60,6 +60,8 @@ export const CLIENT_GUARDED_RPC_SCOPES = {
   [WS_METHODS.pullRequestsGenerateReviewGuide]: AuthOrchestrationOperateScope,
   [WS_METHODS.projectsMakeMultiRepo]: AuthSourceControlWriteScope,
   [WS_METHODS.projectsInspectMultiRepoFolder]: AuthFilesystemReadScope,
+  [WS_METHODS.projectsAddMultiRepoMember]: AuthSourceControlWriteScope,
+  [WS_METHODS.projectsRemoveMultiRepoMember]: AuthSourceControlWriteScope,
   [WS_METHODS.projectsCreateFromThread]: AuthOrchestrationOperateScope,
   [WS_METHODS.sourceControlCloneRepository]: AuthSourceControlWriteScope,
   [WS_METHODS.sourceControlPublishRepository]: AuthSourceControlWriteScope,

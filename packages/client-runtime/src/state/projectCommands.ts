@@ -231,6 +231,22 @@ export function createProjectEnvironmentAtoms<R, E>(
       scheduler: projectScheduler,
       concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
     }),
+    multiRepoMembers: createEnvironmentRpcQueryAtomFamily(runtime, {
+      label: "environment-data:projects:multi-repo-members",
+      tag: WS_METHODS.projectsMultiRepoMembers,
+    }),
+    addMultiRepoMember: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:projects:add-multi-repo-member",
+      tag: WS_METHODS.projectsAddMultiRepoMember,
+      scheduler: projectScheduler,
+      concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
+    }),
+    removeMultiRepoMember: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:projects:remove-multi-repo-member",
+      tag: WS_METHODS.projectsRemoveMultiRepoMember,
+      scheduler: projectScheduler,
+      concurrency: { mode: "serial", key: ({ environmentId }) => environmentId },
+    }),
     inspectMultiRepoFolder: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:projects:inspect-multi-repo-folder",
       tag: WS_METHODS.projectsInspectMultiRepoFolder,

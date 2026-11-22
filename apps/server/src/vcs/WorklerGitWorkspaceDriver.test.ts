@@ -119,6 +119,8 @@ function makeWorkler(
   return {
     inspectGroup: () => Effect.succeed(null),
     initGroup: () => Effect.succeed({ projects: [] }),
+    addGroupProject: () => Effect.die("unused"),
+    removeGroupProject: () => Effect.die("unused"),
     listWorkspaces: () => {
       calls.push("workler.list");
       return Effect.succeed([]);

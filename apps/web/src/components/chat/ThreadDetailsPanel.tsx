@@ -250,6 +250,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                     {show.multiRepo && props.gitCwd ? (
                       <MultiRepoStatusRows
                         environmentId={props.environmentId}
+                        projectId={props.projectId}
                         cwd={props.gitCwd}
                         members={project?.multiRepo?.members.map((member) => member.path) ?? []}
                         workspaceMutationId={props.workspaceMutationId}

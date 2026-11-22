@@ -279,6 +279,10 @@ import {
 import {
   ProjectMakeMultiRepoInput,
   ProjectMakeMultiRepoResult,
+  ProjectMultiRepoMembersInput,
+  ProjectMultiRepoMembersResult,
+  ProjectAddMultiRepoMemberInput,
+  ProjectRemoveMultiRepoMemberInput,
   ProjectInspectMultiRepoFolderInput,
   ProjectInspectMultiRepoFolderResult,
   ProjectCreateNewInput,
@@ -470,6 +474,9 @@ export const WS_METHODS = {
   projectsEnsureScratch: "projects.ensureScratch",
   projectsCreateNew: "projects.createNew",
   projectsMakeMultiRepo: "projects.makeMultiRepo",
+  projectsMultiRepoMembers: "projects.multiRepoMembers",
+  projectsAddMultiRepoMember: "projects.addMultiRepoMember",
+  projectsRemoveMultiRepoMember: "projects.removeMultiRepoMember",
   projectsInspectMultiRepoFolder: "projects.inspectMultiRepoFolder",
   projectsCreateFromThread: "projects.createFromThread",
 
@@ -1647,6 +1654,21 @@ const WsProjectsMakeMultiRepoRpc = Rpc.make(WS_METHODS.projectsMakeMultiRepo, {
   success: ProjectMakeMultiRepoResult,
   error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
 });
+const WsProjectsMultiRepoMembersRpc = Rpc.make(WS_METHODS.projectsMultiRepoMembers, {
+  payload: ProjectMultiRepoMembersInput,
+  success: ProjectMultiRepoMembersResult,
+  error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
+});
+const WsProjectsAddMultiRepoMemberRpc = Rpc.make(WS_METHODS.projectsAddMultiRepoMember, {
+  payload: ProjectAddMultiRepoMemberInput,
+  success: ProjectMultiRepoMembersResult,
+  error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
+});
+const WsProjectsRemoveMultiRepoMemberRpc = Rpc.make(WS_METHODS.projectsRemoveMultiRepoMember, {
+  payload: ProjectRemoveMultiRepoMemberInput,
+  success: ProjectMultiRepoMembersResult,
+  error: Schema.Union([OrchestrationDispatchCommandError, EnvironmentAuthorizationError]),
+});
 const WsProjectsInspectMultiRepoFolderRpc = Rpc.make(WS_METHODS.projectsInspectMultiRepoFolder, {
   payload: ProjectInspectMultiRepoFolderInput,
   success: ProjectInspectMultiRepoFolderResult,
@@ -2486,6 +2508,9 @@ export const WsRpcGroup = RpcGroup.make(
   WsProjectsEnsureScratchRpc,
   WsProjectsCreateNewRpc,
   WsProjectsMakeMultiRepoRpc,
+  WsProjectsMultiRepoMembersRpc,
+  WsProjectsAddMultiRepoMemberRpc,
+  WsProjectsRemoveMultiRepoMemberRpc,
   WsProfilesEditorReadRpc,
   WsProfilesEditorWriteRpc,
   WsProfilesSkillsRpc,

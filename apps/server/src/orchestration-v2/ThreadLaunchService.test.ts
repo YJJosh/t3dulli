@@ -211,6 +211,9 @@ function makeHarness(options: HarnessOptions = {}) {
     Layer.succeed(ProjectService.ProjectService, {
       makeMultiRepo: () => Effect.die("unused"),
       inspectMultiRepoFolder: () => Effect.die("unused"),
+      multiRepoMembers: () => Effect.die("unused"),
+      addMultiRepoMember: () => Effect.die("unused"),
+      removeMultiRepoMember: () => Effect.die("unused"),
       create: () => Effect.die("unused"),
       bootstrap: () => Effect.die("unused"),
       update: () => Effect.die("unused"),
