@@ -125,14 +125,18 @@ export const make = Effect.gen(function* () {
     members: ReadonlyArray<string>,
     sha: string,
   ) {
-    for (const member of members) {
-      const result = yield* git.execute({
-        operation: "ReviewService.memberWithCommit",
-        cwd: path.join(cwd, member),
-        args: ["cat-file", "-e", `${sha}^{commit}`],
-        allowNonZeroExit: true,
-      });
-      if (result.exitCode === 0) return member;
+    // Listed commits come from each member's own history, so look for it there: members that
+    // share history (a fork beside its upstream) can both hold the object.
+    if (/^(?:[0-9a-f]{40}|[0-9a-f]{64})$/i.test(sha)) {
+      for (const member of members) {
+        const result = yield* git.execute({
+          operation: "ReviewService.memberWithCommit",
+          cwd: path.join(cwd, member),
+          args: ["merge-base", "--is-ancestor", sha, "HEAD"],
+          allowNonZeroExit: true,
+        });
+        if (result.exitCode === 0) return member;
+      }
     }
     return yield* noSuchMember(
       "ReviewService.memberWithCommit",
@@ -221,13 +225,28 @@ export const make = Effect.gen(function* () {
     }
     // Members rarely share a base branch, so each compares against its own.
     const { baseRef: _baseRef, ...perMemberInput } = input;
-    const results = yield* Effect.forEach(members, (member) => preview(member, perMemberInput), {
+    const firstPass = yield* Effect.forEach(members, (member) => preview(member, perMemberInput), {
       concurrency: GROUP_CONCURRENCY,
     });
+    // A member too large to list its files sends a bounded patch instead, and the combined
+    // source can't mix the two: the others then send their patches as well.
+    const results =
+      input.metadataOnly === true &&
+      firstPass.some((result) => result.sources.some((source) => source.files === undefined))
+        ? yield* Effect.forEach(
+            members,
+            (member, index) =>
+              firstPass[index]!.sources.some((source) => source.patchesDeferred === true)
+                ? preview(member, { ...perMemberInput, metadataOnly: false })
+                : Effect.succeed(firstPass[index]!),
+            { concurrency: GROUP_CONCURRENCY },
+          )
+        : firstPass;
     return {
       cwd: input.cwd,
       generatedAt: yield* DateTime.now,
       sources: mergeGroupSources(results.map((result) => result.sources)),
+      members,
       ...(results.some((result) => result.incomplete === true) ? { incomplete: true } : {}),
     };
   });
@@ -237,7 +256,10 @@ export const make = Effect.gen(function* () {
     members: ReadonlyArray<string>,
   ) {
     const results = yield* Effect.forEach(
-      members,
+      // A member listed but not cloned here has no commits to show.
+      yield* Effect.filter(members, (member) =>
+        fileSystem.exists(path.join(input.cwd, member)).pipe(Effect.orElseSucceed(() => false)),
+      ),
       (member) =>
         git.getReviewBranchCommits({ cwd: path.join(input.cwd, member) }).pipe(
           Effect.map((result) => ({
@@ -252,7 +274,7 @@ export const make = Effect.gen(function* () {
     );
     const commits = results
       .flatMap((result) => result.commits)
-      .toSorted((left, right) => right.committedAt.localeCompare(left.committedAt));
+      .toSorted((left, right) => Date.parse(right.committedAt) - Date.parse(left.committedAt));
     return {
       commits: commits.slice(0, GROUP_BRANCH_COMMIT_LIMIT),
       truncated:

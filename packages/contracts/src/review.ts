@@ -102,6 +102,8 @@ export const ReviewDiffPreviewResult = Schema.Struct({
   generatedAt: Schema.DateTimeUtc,
   sources: Schema.Array(ReviewDiffPreviewSource),
   incomplete: Schema.optionalKey(Schema.Boolean),
+  /** A multi-repo group's members as this checkout lists them; each file sits under one. */
+  members: Schema.optionalKey(Schema.Array(TrimmedNonEmptyString)),
 });
 export type ReviewDiffPreviewResult = typeof ReviewDiffPreviewResult.Type;
 

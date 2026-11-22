@@ -158,9 +158,13 @@ describe("ReviewService", () => {
           newPath: "api/README.md",
         });
         const commits = yield* review.getBranchCommits({ cwd });
-        return { preview, file, contents, commits };
+        const commit = yield* review.getDiffPreview({ cwd, commitSha: commits.commits[0]!.sha });
+        return { preview, file, contents, commits, commit };
       }).pipe(
-        Effect.provide(layer({ workspaceRoot, baseDir, group: { cwd, members: ["api", "web"] } })),
+        // `gone` is listed but has no folder here, as a member added after the workspace.
+        Effect.provide(
+          layer({ workspaceRoot, baseDir, group: { cwd, members: ["api", "web", "gone"] } }),
+        ),
       );
 
       const [source] = result.preview.sources;
@@ -181,6 +185,53 @@ describe("ReviewService", () => {
         result.commits.commits.map((commit) => commit.subject),
         ["api: api work"],
       );
+      assert.include(result.commit.sources[0]?.diff, "+++ b/api/work.txt");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps every member's changes when one member is too large to list", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const workspaceRoot = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-group-large-" }),
+      );
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
+      const cwd = `${workspaceRoot}/group`;
+      const preview = yield* Effect.gen(function* () {
+        const git = yield* GitVcsDriver.GitVcsDriver;
+        const run = (repo: string, args: ReadonlyArray<string>) =>
+          git.execute({ operation: "test", cwd: repo, args });
+        for (const member of ["api", "docs"]) {
+          const repo = `${cwd}/${member}`;
+          yield* fs.makeDirectory(repo, { recursive: true });
+          yield* run(repo, ["init", "-b", "main"]);
+          yield* run(repo, ["config", "user.email", "t@example.test"]);
+          yield* run(repo, ["config", "user.name", "Test"]);
+          yield* fs.writeFileString(`${repo}/README.md`, `# ${member}\n`);
+          yield* run(repo, ["add", "."]);
+          yield* run(repo, ["commit", "-m", `${member} initial`]);
+        }
+        // More untracked files than review lists, so api sends a bounded patch.
+        yield* fs.makeDirectory(`${cwd}/api/generated`);
+        yield* Effect.forEach(
+          Array.from({ length: 5_001 }, (_, index) => index),
+          (index) => fs.writeFileString(`${cwd}/api/generated/${index}.txt`, ""),
+          { concurrency: 64, discard: true },
+        );
+        yield* fs.writeFileString(`${cwd}/docs/README.md`, "# docs changed\n");
+        const review = yield* ReviewService.ReviewService;
+        return yield* review.getDiffPreview({
+          cwd,
+          sourceKind: "working-tree",
+          metadataOnly: true,
+        });
+      }).pipe(
+        Effect.provide(layer({ workspaceRoot, baseDir, group: { cwd, members: ["api", "docs"] } })),
+      );
+
+      const [source] = preview.sources;
+      assert.isUndefined(source?.files);
+      assert.include(source?.diff, "+++ b/docs/README.md");
     }).pipe(Effect.provide(NodeServices.layer)),
   );
 

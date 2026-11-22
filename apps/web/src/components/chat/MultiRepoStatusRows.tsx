@@ -39,7 +39,11 @@ export function MultiRepoStatusRows(props: {
       props.workspaceMutationId ?? undefined,
     ),
   );
-  const status = summarizeMultiRepoStatus(props.members, review.data?.sources);
+  // The checkout's own list: a workspace keeps the members it was made with.
+  const status = summarizeMultiRepoStatus(
+    review.data?.members ?? props.members,
+    review.data?.sources,
+  );
   return (
     <>
       {props.showBranch && status.branch !== undefined ? (
