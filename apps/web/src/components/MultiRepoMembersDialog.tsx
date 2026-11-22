@@ -247,6 +247,11 @@ function MultiRepoMembersDialog({ projectRef }: { projectRef: ScopedProjectRef }
                   {busy?.kind === "clone" ? gt("Cloning…") : gt("Clone and add")}
                 </Button>
               </div>
+              {clone.members.length > 1 ? (
+                <p className="text-muted-foreground text-xs">
+                  <T>Clone one repository at a time.</T>
+                </p>
+              ) : null}
               {cloneTaken ? (
                 <p className="text-destructive text-xs">
                   <T>

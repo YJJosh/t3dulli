@@ -87,6 +87,7 @@ describe("visible pull request line-count targets", () => {
       {
         environmentId: ENV_1,
         projectId: "project-1",
+        repository: "pingdotgg/t3code",
         number: 1,
         additions: 1,
         deletions: 1,
@@ -103,6 +104,21 @@ describe("visible pull request line-count targets", () => {
     expect(pullRequestStatsBatches(entriesByKey, keys)[0]?.input.refs).toEqual([
       { projectId: "project-1", repository: "pingdotgg/t3code", number: 2 },
     ]);
+  });
+
+  it("keeps the counts of two repositories of one project that share a number apart", () => {
+    const stats = mergePullRequestDiffStats(
+      new Map(),
+      ["acme/api", "acme/web"].map((repository, index) => ({
+        environmentId: ENV_1,
+        projectId: "shop",
+        repository,
+        number: 7,
+        additions: index + 1,
+        deletions: 0,
+      })),
+    );
+    expect(stats.size).toBe(2);
   });
 
   it("keeps every per-environment batch within the stats contract limit", () => {

@@ -2122,7 +2122,8 @@ const make = Effect.gen(function* () {
           const ordinalStart = ref.lastIndexOf("/") + 1;
           return (
             prefixes.has(ref.slice(0, ordinalStart)) &&
-            /^(0|[1-9]\d*)$/.test(ref.slice(ordinalStart))
+            // A restore's undo point, left by a server that stopped mid-restore, goes too.
+            /^(0|[1-9]\d*)(-restore-undo)?$/.test(ref.slice(ordinalStart))
           );
         });
         if (refs.length === 0) return;
