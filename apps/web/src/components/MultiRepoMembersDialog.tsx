@@ -16,6 +16,7 @@ import { create } from "zustand";
 import { readProject, subscribeProject, useProject } from "../state/entities";
 import { projectEnvironment } from "../state/projects";
 import { useEnvironmentQuery } from "../state/query";
+import { revisionedQuery } from "../state/revisionedQuery";
 import { sourceControlEnvironment } from "../state/sourceControl";
 import { useAtomCommand } from "../state/use-atom-command";
 import { Button } from "./ui/button";
@@ -32,9 +33,15 @@ import { Input } from "./ui/input";
 import { Label } from "./ui/label";
 import { toastManager } from "./ui/toast";
 
-const useRequest = create<{ projectRef: ScopedProjectRef | null; session: number }>(() => ({
+const useRequest = create<{
+  projectRef: ScopedProjectRef | null;
+  session: number;
+  /** Bumped by every change, so a reopened dialog reads the list again. */
+  revision: number;
+}>(() => ({
   projectRef: null,
   session: 0,
+  revision: 0,
 }));
 
 let endRequestWithProject: (() => void) | null = null;
@@ -68,12 +75,20 @@ function MultiRepoMembersDialog({ projectRef }: { projectRef: ScopedProjectRef }
   const id = useId();
   const project = useProject(projectRef);
   const { environmentId, projectId } = projectRef;
+  const revision = useRequest((state) => state.revision);
   const listed = useEnvironmentQuery(
-    projectEnvironment.multiRepoMembers({ environmentId, input: { projectId } }),
+    revisionedQuery(
+      projectEnvironment.multiRepoMembers({ environmentId, input: { projectId } }),
+      String(revision),
+    ),
   );
   // Each change answers with the new lists, so they show before the query reruns.
-  const [changed, setChanged] = useState<ProjectMultiRepoMembersResult | null>(null);
-  const lists = changed ?? listed.data ?? null;
+  const [latest, setLatest] = useState<ProjectMultiRepoMembersResult | null>(null);
+  const lists = latest ?? listed.data ?? null;
+  const changed = (result: ProjectMultiRepoMembersResult) => {
+    setLatest(result);
+    useRequest.setState((state) => ({ revision: state.revision + 1 }));
+  };
   const [busy, setBusy] = useState<Busy>(null);
   const [cloneText, setCloneText] = useState("");
   const addMember = useAtomCommand(projectEnvironment.addMultiRepoMember, { reportFailure: false });
@@ -87,7 +102,9 @@ function MultiRepoMembersDialog({ projectRef }: { projectRef: ScopedProjectRef }
     projectEnvironment.addMultiRepoMember.permissionAtom(environmentId),
   );
   const clone = parseMultiRepoCloneInput(cloneText);
-  const cloneMember = clone.invalid.length === 0 ? (clone.members[0] ?? null) : null;
+  // One at a time, so a failed clone never leaves the others half added.
+  const cloneMember =
+    clone.invalid.length === 0 && clone.members.length === 1 ? clone.members[0]! : null;
   const cloneTaken =
     cloneMember !== null &&
     [...(lists?.members ?? []), ...(lists?.candidates ?? [])].some(
@@ -108,7 +125,7 @@ function MultiRepoMembersDialog({ projectRef }: { projectRef: ScopedProjectRef }
     setBusy({ kind: "add", path });
     const result = await addMember({ environmentId, input: { projectId, path } });
     setBusy(null);
-    if (result._tag === "Success") setChanged(result.value);
+    if (result._tag === "Success") changed(result.value);
     else fail(gt("Could not add {path}", { path }), result);
   };
 
@@ -116,7 +133,7 @@ function MultiRepoMembersDialog({ projectRef }: { projectRef: ScopedProjectRef }
     setBusy({ kind: "remove", path });
     const result = await removeMember({ environmentId, input: { projectId, path } });
     setBusy(null);
-    if (result._tag === "Success") setChanged(result.value);
+    if (result._tag === "Success") changed(result.value);
     else fail(gt("Could not remove {path}", { path }), result);
   };
 

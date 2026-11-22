@@ -1922,16 +1922,14 @@ function OpenCommandPaletteDialog(props: {
     });
   }
 
-  const multiRepoProject =
-    currentProjectGroup === null
-      ? undefined
-      : projects.find(
-          (project) =>
-            project.multiRepo != null &&
-            currentProjectGroup.memberProjectRefs.some(
-              (ref) => ref.environmentId === project.environmentId && ref.projectId === project.id,
-            ),
-        );
+  // Each machine keeps its own list, so this is the copy the active thread works in.
+  const multiRepoProject = projects.find(
+    (project) =>
+      project.multiRepo != null &&
+      contextualProjectRef !== null &&
+      project.environmentId === contextualProjectRef.environmentId &&
+      project.id === contextualProjectRef.projectId,
+  );
   if (multiRepoProject) {
     actionItems.push({
       kind: "action",
