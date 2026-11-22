@@ -24,12 +24,16 @@ export const ThreadLinkedPullRequest = Schema.Struct({
 });
 export type ThreadLinkedPullRequest = typeof ThreadLinkedPullRequest.Type;
 
-/** stack-dismissed hides an unlinked native member and prevents sync from re-adding it. */
+/**
+ * branch is the shared branch's pull request in a multi-repo member. stack-dismissed hides an
+ * unlinked stack or branch link and prevents sync from re-adding it.
+ */
 export const ThreadPullRequestLinkSource = Schema.Literals([
   "manual",
   "created",
   "agent",
   "stack",
+  "branch",
   "stack-dismissed",
 ]);
 export type ThreadPullRequestLinkSource = typeof ThreadPullRequestLinkSource.Type;

@@ -660,6 +660,11 @@ const CreatePullRequestTool = Tool.make("pull_request_create", {
     body: Schema.String,
     base: Schema.optional(TrimmedNonEmptyString),
     draft: Schema.optional(Schema.Boolean),
+    member: Schema.optional(
+      TrimmedNonEmptyString.annotate({
+        description: "Multi-repo project only: the member folder to open it from, such as api.",
+      }),
+    ),
   }),
   success: CreatePullRequestResult,
   failure: PullRequestToolError,

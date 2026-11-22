@@ -165,7 +165,10 @@ export function useLinkedPullRequestActions(input: {
         ? [
             {
               id: "unlink",
-              title: link.source === "stack" ? gt("Dismiss from thread") : gt("Unlink from thread"),
+              title:
+                link.source === "stack" || link.source === "branch"
+                  ? gt("Dismiss from thread")
+                  : gt("Unlink from thread"),
               image: "xmark",
               attributes: { destructive: true },
             },

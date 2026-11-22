@@ -14,6 +14,7 @@ import {
   type ThreadPullRequestLink,
   TrimmedNonEmptyString,
 } from "@t3tools/contracts";
+import { canonicalRepositoryPath, parseGitRemoteRepository } from "@t3tools/shared/git";
 import * as Cause from "effect/Cause";
 import * as SecureRandom from "effect/crypto/SecureRandom";
 import * as Effect from "effect/Effect";
@@ -244,12 +245,23 @@ function projectForPullRequest(
             },
             project.repositoryIdentity,
           );
-    return (
+    if (
       own !== null &&
       projectKey !== null &&
       own.host === projectKey.host &&
       own.repository === projectKey.repository
-    );
+    ) {
+      return true;
+    }
+    // A multi-repo project holds the pull requests of every member's repository.
+    return (project.multiRepo?.members ?? []).some((member) => {
+      const remote = member.remoteUrl === null ? null : parseGitRemoteRepository(member.remoteUrl);
+      return (
+        remote !== null &&
+        remote.host === target.host.toLowerCase() &&
+        remote.path === canonicalRepositoryPath(target.repository.toLowerCase())
+      );
+    });
   };
   if (preferred !== undefined && matches(preferred)) return preferred;
   return projects.find(matches);
@@ -1017,9 +1029,21 @@ const make = Effect.gen(function* () {
         if (project === undefined) {
           return yield* new PullRequestProjectNotFoundError({ repository: "" });
         }
+        const checkout = thread.worktreePath ?? project.workspaceRoot;
+        const members = project.multiRepo?.members.map((member) => member.path) ?? [];
+        if (
+          members.length > 0 ? !members.includes(input.member ?? "") : input.member !== undefined
+        ) {
+          return yield* new PullRequestForgeError({
+            detail:
+              members.length > 0
+                ? `This thread spans several repositories. Pass member: one of ${members.join(", ")}.`
+                : "This project is one repository. Leave out member.",
+          });
+        }
         const created = yield* git
           .createPullRequest({
-            cwd: thread.worktreePath ?? project.workspaceRoot,
+            cwd: input.member === undefined ? checkout : `${checkout}/${input.member}`,
             projectId: project.id,
             title: input.title,
             body: input.body,
