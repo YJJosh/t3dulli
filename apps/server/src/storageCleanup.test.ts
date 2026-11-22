@@ -810,9 +810,12 @@ describe("checkpoint ref cleanup", () => {
   it.live("prunes a deleted multi-repo thread's refs in every member", () =>
     runCleanupTest(
       Effect.gen(function* () {
-        const { service, addThread, listRefs, refRepos } = yield* checkpointCleanupFixture("group");
+        const { service, addThread, listRefs, refRepos, repo, fs } =
+          yield* checkpointCleanupFixture("group");
         yield* addThread("deleted", { deleted: true });
         const retained = yield* addThread("active");
+        // `web` has left the group since, but its folder keeps the refs it got.
+        yield* fs.writeFileString(`${repo}/.workler`, "project api\n");
         yield* service.runNow;
         for (const refRepo of refRepos) expect(yield* listRefs(refRepo)).toEqual(retained.sort());
       }).pipe(Effect.provide(Sqlite.layerMemory)),
