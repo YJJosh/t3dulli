@@ -2059,6 +2059,23 @@ const make = Effect.gen(function* () {
         targets.set(key, owned);
       }
     }
+    // A multi-repo group keeps its checkpoints in every member, and its root members
+    // also receive those of the workspaces removed from it.
+    // Copied first: the loop adds members, which are never groups themselves.
+    const owners = Array.from(targets);
+    for (const [cwd, prefixes] of owners) {
+      if (
+        Option.isNone(multiRepo) ||
+        !(yield* fs.exists(cwd).pipe(Effect.orElseSucceed(() => false)))
+      )
+        continue;
+      for (const member of (yield* multiRepo.value.members(cwd)) ?? []) {
+        const key = path.join(cwd, member);
+        const owned = targets.get(key) ?? new Set<string>();
+        for (const prefix of prefixes) owned.add(prefix);
+        targets.set(key, owned);
+      }
+    }
     const repositories = new Map<string, { cwd: string; prefixes: Set<string> }>();
     for (const [cwd, prefixes] of targets) {
       yield* Effect.gen(function* () {

@@ -16,6 +16,7 @@ import { describe, expect } from "vite-plus/test";
 import * as Base64Url from "effect/encoding/Base64Url";
 import { parseTurnDiffFilesFromNumstat } from "./Diffs.ts";
 import * as CheckpointStore from "./CheckpointStore.ts";
+import * as MultiRepoWorkspaces from "../vcs/MultiRepoWorkspaces.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as ServerConfig from "../config.ts";
@@ -698,4 +699,124 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
       }),
     );
   });
+});
+
+// Folders named `group` are multi-repo groups; `group-docs` also has a member added later.
+const layerGroupTest = CheckpointStore.layer.pipe(
+  Layer.provide(
+    Layer.mock(MultiRepoWorkspaces.MultiRepoWorkspaces)({
+      members: (cwd) =>
+        Effect.succeed(
+          NodePath.basename(cwd) === "group"
+            ? ["api", "web"]
+            : NodePath.basename(cwd) === "group-docs"
+              ? ["api", "docs"]
+              : null,
+        ),
+    }),
+  ),
+  Layer.provideMerge(layerVcsDriverTest),
+  Layer.provideMerge(layerVcsProcessTest),
+  Layer.provideMerge(layerServerConfig),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+);
+
+it.layer(layerGroupTest)("CheckpointStore.layer for a multi-repo group", (it) => {
+  const makeGroup = (name: string, members: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const group = NodePath.join(yield* makeTmpDir(), name);
+      for (const member of members) {
+        yield* fileSystem.makeDirectory(NodePath.join(group, member), { recursive: true });
+        yield* initRepoWithCommit(NodePath.join(group, member));
+      }
+      return group;
+    });
+
+  it.effect("checkpoints, diffs and restores every member under its folder", () =>
+    Effect.gen(function* () {
+      const group = yield* makeGroup("group", ["api", "web"]);
+      const store = yield* CheckpointStore.CheckpointStore;
+      const threadId = ThreadId.make("thread-group");
+      const before = checkpointRefForThreadTurn(threadId, 0);
+      const after = checkpointRefForThreadTurn(threadId, 1);
+
+      expect(yield* store.isGitRepository(group)).toBe(true);
+      yield* store.captureCheckpoint({ cwd: group, checkpointRef: before });
+      yield* writeTextFile(NodePath.join(group, "api", "README.md"), "# api\n");
+      yield* git(NodePath.join(group, "web"), ["mv", "README.md", "GUIDE.md"]);
+      yield* writeTextFile(NodePath.join(group, "web", "new file.txt"), "new\n");
+      yield* store.captureCheckpoint({ cwd: group, checkpointRef: after });
+
+      const refs = { cwd: group, fromCheckpointRef: before, toCheckpointRef: after };
+      const numstat = yield* store.diffCheckpoints({
+        ...refs,
+        ignoreWhitespace: false,
+        format: "numstat",
+      });
+      expect(parseTurnDiffFilesFromNumstat(numstat)).toEqual([
+        { path: "api/README.md", additions: 1, deletions: 1 },
+        { path: "web/GUIDE.md", previousPath: "web/README.md", additions: 0, deletions: 0 },
+        { path: "web/new file.txt", additions: 1, deletions: 0 },
+      ]);
+      const patch = yield* store.diffCheckpoints({ ...refs, ignoreWhitespace: false });
+      expect(patch).toContain("diff --git a/api/README.md b/api/README.md");
+      expect(patch).toContain("rename from web/README.md\nrename to web/GUIDE.md");
+      expect(patch).toContain("+++ b/web/new file.txt");
+      expect(yield* store.listAuthoredPaths(refs)).toBeNull();
+
+      const webOnly = yield* store.diffCheckpoints({
+        ...refs,
+        ignoreWhitespace: false,
+        filePaths: ["web/new file.txt"],
+      });
+      expect(webOnly).toContain("b/web/new file.txt");
+      expect(webOnly).not.toContain("api/README.md");
+
+      expect(yield* store.restoreCheckpoint({ cwd: group, checkpointRef: before })).toBe(true);
+      const fileSystem = yield* FileSystem.FileSystem;
+      expect(yield* fileSystem.readFileString(NodePath.join(group, "api", "README.md"))).toBe(
+        "# test\n",
+      );
+      expect(yield* fileSystem.exists(NodePath.join(group, "web", "new file.txt"))).toBe(false);
+
+      yield* store.deleteCheckpointRefs({ cwd: group, checkpointRefs: [before] });
+      expect(yield* store.hasCheckpointRef({ cwd: group, checkpointRef: before })).toBe(false);
+      expect(
+        yield* git(NodePath.join(group, "web"), ["for-each-ref", "--format=%(refname)", before]),
+      ).toBe("");
+    }),
+  );
+
+  it.effect("restores nothing unless every member has the checkpoint", () =>
+    Effect.gen(function* () {
+      const group = yield* makeGroup("group-docs", ["api", "docs"]);
+      const store = yield* CheckpointStore.CheckpointStore;
+      const threadId = ThreadId.make("thread-group-docs");
+      const before = checkpointRefForThreadTurn(threadId, 0);
+      const after = checkpointRefForThreadTurn(threadId, 1);
+      const fileSystem = yield* FileSystem.FileSystem;
+      // As if `docs` joined the group after the first checkpoint.
+      yield* store.captureCheckpoint({ cwd: NodePath.join(group, "api"), checkpointRef: before });
+      yield* writeTextFile(NodePath.join(group, "api", "README.md"), "# api\n");
+      yield* store.captureCheckpoint({ cwd: group, checkpointRef: after });
+
+      expect(yield* store.hasCheckpointRef({ cwd: group, checkpointRef: before })).toBe(false);
+      expect(yield* store.restoreCheckpoint({ cwd: group, checkpointRef: before })).toBe(false);
+      expect(yield* fileSystem.readFileString(NodePath.join(group, "api", "README.md"))).toBe(
+        "# api\n",
+      );
+      // The late member has nothing of the turn; the others still show theirs.
+      const numstat = yield* store.diffCheckpoints({
+        cwd: group,
+        fromCheckpointRef: before,
+        toCheckpointRef: after,
+        ignoreWhitespace: false,
+        format: "numstat",
+      });
+      expect(parseTurnDiffFilesFromNumstat(numstat).map((file) => file.path)).toEqual([
+        "api/README.md",
+      ]);
+    }),
+  );
 });

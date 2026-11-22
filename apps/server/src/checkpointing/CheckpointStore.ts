@@ -1,10 +1,16 @@
 import { type CheckpointRef } from "@t3tools/contracts";
+import * as Cache from "effect/Cache";
 import * as Context from "effect/Context";
+import * as Duration from "effect/Duration";
 import * as Effect from "effect/Effect";
 import * as Layer from "effect/Layer";
+import * as Option from "effect/Option";
+import * as Path from "effect/Path";
 
 import type { CheckpointStoreError } from "./Errors.ts";
-import type { VcsCheckpointOps } from "../vcs/VcsDriver.ts";
+import { parseTurnDiffFilesFromNumstat } from "./Diffs.ts";
+import * as VcsDriver from "../vcs/VcsDriver.ts";
+import * as MultiRepoWorkspaces from "../vcs/MultiRepoWorkspaces.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 
 export interface CaptureCheckpointInput {
@@ -47,6 +53,7 @@ export interface DeleteCheckpointRefsInput {
 export class CheckpointStore extends Context.Service<
   CheckpointStore,
   {
+    /** Also true for a multi-repo group or workspace, whose checkpoints span its members. */
     readonly isGitRepository: (cwd: string) => Effect.Effect<boolean, CheckpointStoreError>;
 
     readonly captureCheckpoint: (
@@ -65,7 +72,10 @@ export class CheckpointStore extends Context.Service<
       input: DiffCheckpointsInput,
     ) => Effect.Effect<string, CheckpointStoreError>;
 
-    /** Null means HEAD is unchanged or unrecorded; all changed paths then belong to the turn. */
+    /**
+     * Null means HEAD is unchanged or unrecorded; all changed paths then belong to the turn.
+     * In a multi-repo group, paths start with their member's folder, as in `diffCheckpoints`.
+     */
     readonly listAuthoredPaths: (
       input: ListAuthoredPathsInput,
     ) => Effect.Effect<ReadonlySet<string> | null, CheckpointStoreError>;
@@ -79,19 +89,68 @@ export class CheckpointStore extends Context.Service<
 /** @public */
 export const make = Effect.gen(function* () {
   const vcsRegistry = yield* VcsDriverRegistry.VcsDriverRegistry;
+  const path = yield* Path.Path;
+  const multiRepo = yield* Effect.serviceOption(MultiRepoWorkspaces.MultiRepoWorkspaces);
+
+  // One turn makes several store calls on the same cwd, and a group's member list
+  // costs a Workler call. A workspace's own `.workler` fixes its members, so a short
+  // lifetime only delays a member added at the group root.
+  const membersCache = yield* Cache.make({
+    capacity: 256,
+    timeToLive: Duration.seconds(10),
+    lookup: (cwd: string) =>
+      Option.isSome(multiRepo) ? multiRepo.value.members(cwd) : Effect.succeed(null),
+  });
 
   const resolveCheckpoints = Effect.fn("CheckpointStore.resolveCheckpoints")(function* (
     cwd: string,
   ) {
     const handle = yield* vcsRegistry.resolve({ cwd });
-    return handle.driver.checkpoints satisfies VcsCheckpointOps;
+    return handle.driver.checkpoints satisfies VcsDriver.VcsCheckpointOps;
   });
+
+  interface Member {
+    readonly prefix: string;
+    readonly cwd: string;
+    readonly checkpoints: VcsDriver.VcsCheckpointOps;
+  }
+
+  /** The members of the group at `cwd` with their checkpoint ops, or null for a single repository. */
+  const resolveMembers = Effect.fn("CheckpointStore.resolveMembers")(function* (cwd: string) {
+    const members = yield* Cache.get(membersCache, cwd);
+    if (members === null) return null;
+    return yield* Effect.forEach(members, (member) => {
+      const memberCwd = path.join(cwd, member);
+      return resolveCheckpoints(memberCwd).pipe(
+        Effect.map((checkpoints): Member => ({ prefix: member, cwd: memberCwd, checkpoints })),
+      );
+    });
+  });
+
+  const MEMBER_CONCURRENCY = 4;
+
+  // A member added to the group after the earlier checkpoint has no ref for it, so it
+  // has nothing of the turn to show. Any other failure still fails.
+  const unlessMemberLacksRef = <A, E>(
+    member: Member,
+    checkpointRef: CheckpointRef,
+    effect: Effect.Effect<A, E>,
+    empty: A,
+  ) =>
+    effect.pipe(
+      Effect.catch((error) =>
+        member.checkpoints
+          .hasCheckpointRef({ cwd: member.cwd, checkpointRef })
+          .pipe(Effect.flatMap((exists) => (exists ? Effect.fail(error) : Effect.succeed(empty)))),
+      ),
+    );
 
   // The registry reads an unreadable repository as none; ask Git again so that fails here.
   const isGitRepository: CheckpointStore["Service"]["isGitRepository"] = Effect.fn(
     "CheckpointStore.isGitRepository",
   )(function* (cwd) {
     if ((yield* vcsRegistry.detect({ cwd, requestedKind: "git" })) !== null) return true;
+    if (((yield* Cache.get(membersCache, cwd))?.length ?? 0) > 0) return true;
     const git = yield* vcsRegistry.get("git");
     return (yield* git.detectRepository(cwd)) !== null;
   });
@@ -99,43 +158,171 @@ export const make = Effect.gen(function* () {
   const captureCheckpoint: CheckpointStore["Service"]["captureCheckpoint"] = Effect.fn(
     "captureCheckpoint",
   )(function* (input) {
-    const checkpoints = yield* resolveCheckpoints(input.cwd);
-    return yield* checkpoints.captureCheckpoint(input);
+    const members = yield* resolveMembers(input.cwd);
+    if (members === null) {
+      const checkpoints = yield* resolveCheckpoints(input.cwd);
+      return yield* checkpoints.captureCheckpoint(input);
+    }
+    // Every member gets the same ref; `hasCheckpointRef` needs all of them before it counts.
+    yield* Effect.forEach(
+      members,
+      (member) => member.checkpoints.captureCheckpoint({ ...input, cwd: member.cwd }),
+      { concurrency: MEMBER_CONCURRENCY, discard: true },
+    );
   });
 
   const hasCheckpointRef: CheckpointStore["Service"]["hasCheckpointRef"] = Effect.fn(
     "hasCheckpointRef",
   )(function* (input) {
-    const checkpoints = yield* resolveCheckpoints(input.cwd);
-    return yield* checkpoints.hasCheckpointRef(input);
+    const members = yield* resolveMembers(input.cwd);
+    if (members === null) {
+      const checkpoints = yield* resolveCheckpoints(input.cwd);
+      return yield* checkpoints.hasCheckpointRef(input);
+    }
+    if (members.length === 0) return false;
+    const found = yield* Effect.forEach(
+      members,
+      (member) => member.checkpoints.hasCheckpointRef({ ...input, cwd: member.cwd }),
+      { concurrency: MEMBER_CONCURRENCY },
+    );
+    return found.every(Boolean);
   });
 
   const restoreCheckpoint: CheckpointStore["Service"]["restoreCheckpoint"] = Effect.fn(
     "restoreCheckpoint",
   )(function* (input) {
-    const checkpoints = yield* resolveCheckpoints(input.cwd);
-    return yield* checkpoints.restoreCheckpoint(input);
+    const members = yield* resolveMembers(input.cwd);
+    if (members === null) {
+      const checkpoints = yield* resolveCheckpoints(input.cwd);
+      return yield* checkpoints.restoreCheckpoint(input);
+    }
+    // Check every member first, so a missing ref never leaves the group half restored.
+    if (
+      input.fallbackToHead !== true &&
+      !(yield* hasCheckpointRef({ cwd: input.cwd, checkpointRef: input.checkpointRef }))
+    ) {
+      return false;
+    }
+    let restored = members.length > 0;
+    for (const member of members) {
+      if (!(yield* member.checkpoints.restoreCheckpoint({ ...input, cwd: member.cwd }))) {
+        restored = false;
+      }
+    }
+    return restored;
   });
+
+  /** Splits group paths by member; null keeps every path of every member. */
+  const pathsByMember = (
+    members: ReadonlyArray<Member>,
+    filePaths: ReadonlyArray<string> | undefined,
+  ) => {
+    if (filePaths === undefined) return null;
+    const byMember = new Map<string, Array<string>>();
+    for (const filePath of filePaths) {
+      // Two-level members like `apps/web` mean the longest matching prefix wins.
+      const member = members
+        .filter((candidate) => filePath.startsWith(`${candidate.prefix}/`))
+        .toSorted((left, right) => right.prefix.length - left.prefix.length)[0];
+      if (member === undefined) continue;
+      const paths = byMember.get(member.prefix) ?? [];
+      paths.push(filePath.slice(member.prefix.length + 1));
+      byMember.set(member.prefix, paths);
+    }
+    return byMember;
+  };
 
   const diffCheckpoints: CheckpointStore["Service"]["diffCheckpoints"] = Effect.fn(
     "diffCheckpoints",
   )(function* (input) {
-    const checkpoints = yield* resolveCheckpoints(input.cwd);
-    return yield* checkpoints.diffCheckpoints(input);
+    const members = yield* resolveMembers(input.cwd);
+    if (members === null) {
+      const checkpoints = yield* resolveCheckpoints(input.cwd);
+      return yield* checkpoints.diffCheckpoints(input);
+    }
+    const filePaths = pathsByMember(members, input.filePaths);
+    const maxOutputBytes = input.maxOutputBytes ?? VcsDriver.CHECKPOINT_DIFF_MAX_OUTPUT_BYTES;
+    let output = "";
+    let remainingBytes = maxOutputBytes;
+    for (const member of members) {
+      const memberPaths = filePaths?.get(member.prefix);
+      if (filePaths !== null && memberPaths === undefined) continue;
+      const memberInput = {
+        ...input,
+        cwd: member.cwd,
+        pathPrefix: member.prefix,
+        maxOutputBytes: remainingBytes,
+        ...(memberPaths === undefined ? {} : { filePaths: memberPaths }),
+      };
+      const diff = yield* unlessMemberLacksRef(
+        member,
+        input.fromCheckpointRef,
+        member.checkpoints.diffCheckpoints(memberInput),
+        "",
+      );
+      output += diff;
+      remainingBytes -= Buffer.byteLength(diff);
+      // A member that filled the budget was cut short; later members would follow its cut.
+      if (remainingBytes <= 0) break;
+    }
+    return output;
   });
 
   const listAuthoredPaths: CheckpointStore["Service"]["listAuthoredPaths"] = Effect.fn(
     "listAuthoredPaths",
   )(function* (input) {
-    const checkpoints = yield* resolveCheckpoints(input.cwd);
-    return yield* checkpoints.listAuthoredPaths(input);
+    const members = yield* resolveMembers(input.cwd);
+    if (members === null) {
+      const checkpoints = yield* resolveCheckpoints(input.cwd);
+      return yield* checkpoints.listAuthoredPaths(input);
+    }
+    const authored = yield* Effect.forEach(
+      members,
+      (member) =>
+        unlessMemberLacksRef(
+          member,
+          input.fromCheckpointRef,
+          member.checkpoints.listAuthoredPaths({ ...input, cwd: member.cwd }),
+          new Set<string>() as ReadonlySet<string> | null,
+        ).pipe(Effect.map((paths) => ({ member, paths }))),
+      { concurrency: MEMBER_CONCURRENCY },
+    );
+    if (authored.every(({ paths }) => paths === null)) return null;
+    const paths = new Set<string>();
+    for (const { member, paths: memberPaths } of authored) {
+      if (memberPaths !== null) {
+        for (const memberPath of memberPaths) paths.add(`${member.prefix}/${memberPath}`);
+        continue;
+      }
+      // An unchanged HEAD means every changed path of this member is the turn's own.
+      const numstat = yield* member.checkpoints.diffCheckpoints({
+        ...input,
+        cwd: member.cwd,
+        pathPrefix: member.prefix,
+        ignoreWhitespace: false,
+        format: "numstat",
+      });
+      for (const file of parseTurnDiffFilesFromNumstat(numstat)) {
+        paths.add(file.path);
+        if (file.previousPath !== undefined) paths.add(file.previousPath);
+      }
+    }
+    return paths;
   });
 
   const deleteCheckpointRefs: CheckpointStore["Service"]["deleteCheckpointRefs"] = Effect.fn(
     "deleteCheckpointRefs",
   )(function* (input) {
-    const checkpoints = yield* resolveCheckpoints(input.cwd);
-    return yield* checkpoints.deleteCheckpointRefs(input);
+    const members = yield* resolveMembers(input.cwd);
+    if (members === null) {
+      const checkpoints = yield* resolveCheckpoints(input.cwd);
+      return yield* checkpoints.deleteCheckpointRefs(input);
+    }
+    yield* Effect.forEach(
+      members,
+      (member) => member.checkpoints.deleteCheckpointRefs({ ...input, cwd: member.cwd }),
+      { concurrency: MEMBER_CONCURRENCY, discard: true },
+    );
   });
 
   return CheckpointStore.of({

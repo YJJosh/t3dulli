@@ -53,6 +53,7 @@ import * as CheckoutCloner from "./CheckoutCloner.ts";
 import * as CheckpointUntrackedBlobs from "./checkpointUntrackedBlobs.ts";
 import * as VcsDriver from "./VcsDriver.ts";
 import * as VcsProcess from "./VcsProcess.ts";
+import { prefixedPatchRenderArgs, prefixNumstat, prefixPatchHeaders } from "./prefixDiffPaths.ts";
 
 export interface ExecuteGitInput {
   readonly operation: string;
@@ -148,6 +149,11 @@ export interface CreateWorktreeProgress {
     ok: boolean;
     detail: string | null;
   }) => Effect.Effect<void, never>;
+}
+
+export interface ReviewDiffPreviewOptions {
+  /** Folder put before every path in the result, such as a multi-repo member's path. */
+  readonly pathPrefix?: string;
 }
 
 export interface CreateWorktreeOptions {
@@ -376,6 +382,7 @@ export class GitVcsDriver extends Context.Service<
     ) => Effect.Effect<ReviewBranchCommitsResult, GitCommandError>;
     readonly getReviewDiffPreview: (
       input: ReviewDiffPreviewInput,
+      options?: ReviewDiffPreviewOptions,
     ) => Effect.Effect<ReviewDiffPreviewResult, GitCommandError>;
     readonly getReviewDiffFileContents: (
       input: ReviewDiffFileContentsInput,
@@ -2104,7 +2111,9 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
           "--no-ext-diff",
           "--no-textconv",
           "--submodule=short",
-          ...PATCH_RENDER_PREFIX_ARGS,
+          ...(input.pathPrefix === undefined
+            ? PATCH_RENDER_PREFIX_ARGS
+            : prefixedPatchRenderArgs(input.pathPrefix)),
           ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
           `${fromRevision}^{commit}`,
           `${input.toCheckpointRef}^{commit}`,
@@ -2128,7 +2137,10 @@ export const makeVcsDriverShape = Effect.fn("makeGitVcsDriverShape")(function* (
         });
       }
 
-      return result.stdout;
+      if (input.pathPrefix === undefined) return result.stdout;
+      return input.format === "numstat"
+        ? prefixNumstat(result.stdout, input.pathPrefix)
+        : prefixPatchHeaders(result.stdout, input.pathPrefix);
     }),
 
     listAuthoredPaths: Effect.fn("GitVcsDriver.checkpoints.listAuthoredPaths")(function* (input) {

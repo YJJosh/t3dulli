@@ -707,11 +707,18 @@ const runCleanupTest = <A, E>(
 const legacyCheckpointRef = (threadId: string, turn: number) =>
   `refs/t3/checkpoints/${Base64Url.encode(threadId)}/turn/${turn}`;
 
-const checkpointCleanupFixture = Effect.fn("test.checkpointCleanupFixture")(function* () {
+const checkpointCleanupFixture = Effect.fn("test.checkpointCleanupFixture")(function* (
+  kind: "linked" | "group" = "linked",
+) {
   const sql = yield* SqlClient.SqlClient;
   const git = yield* GitVcsDriver.GitVcsDriver;
-  const fixture = yield* cleanupFixture(DEFAULT_SERVER_SETTINGS.storageCleanup, sql);
+  const fixture = yield* cleanupFixture(DEFAULT_SERVER_SETTINGS.storageCleanup, sql, kind);
   const { repo, worktree, command } = fixture;
+  // A group keeps checkpoints in each member, at its root and in its workspace.
+  const refRepos =
+    kind === "group"
+      ? ["api", "web"].flatMap((member) => [`${repo}/${member}`, `${worktree}/${member}`])
+      : [repo];
   const timestamp = DateTime.formatIso(at(0));
   yield* sql`INSERT INTO projection_projects ${sql.insert({
     project_id: "project-1",
@@ -761,19 +768,21 @@ const checkpointCleanupFixture = Effect.fn("test.checkpointCleanupFixture")(func
           yield* checkpointRefForScopeOrdinal({ scopeId, ordinalWithinScope: 1 }),
           legacyCheckpointRef(id, 0),
         ];
-    for (const ref of refs) yield* command(repo, ["update-ref", ref, "HEAD"]);
+    for (const refRepo of refRepos) {
+      for (const ref of refs) yield* command(refRepo, ["update-ref", ref, "HEAD"]);
+    }
     return refs;
   });
-  const listRefs = () =>
+  const listRefs = (cwd = repo) =>
     git
       .execute({
         operation: "cleanup-test.list-checkpoints",
-        cwd: repo,
+        cwd,
         args: ["for-each-ref", "--format=%(refname)", "refs/t3/"],
         maxOutputBytes: 16 * 1024 * 1024,
       })
       .pipe(Effect.map(({ stdout }) => stdout.trim().split("\n").filter(Boolean).sort()));
-  return { ...fixture, sql, addThread, listRefs };
+  return { ...fixture, sql, addThread, listRefs, refRepos };
 });
 
 describe("checkpoint ref cleanup", () => {
@@ -794,6 +803,18 @@ describe("checkpoint ref cleanup", () => {
         yield* command(repo, ["worktree", "remove", worktree]);
         yield* service.runNow;
         expect(yield* listRefs()).toEqual(retained.sort());
+      }).pipe(Effect.provide(Sqlite.layerMemory)),
+    ),
+  );
+
+  it.live("prunes a deleted multi-repo thread's refs in every member", () =>
+    runCleanupTest(
+      Effect.gen(function* () {
+        const { service, addThread, listRefs, refRepos } = yield* checkpointCleanupFixture("group");
+        yield* addThread("deleted", { deleted: true });
+        const retained = yield* addThread("active");
+        yield* service.runNow;
+        for (const refRepo of refRepos) expect(yield* listRefs(refRepo)).toEqual(retained.sort());
       }).pipe(Effect.provide(Sqlite.layerMemory)),
     ),
   );

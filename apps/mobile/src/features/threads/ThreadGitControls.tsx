@@ -354,7 +354,26 @@ export function useThreadGitMenuDefinition(props: ThreadGitMenuProps): AppBarMen
   const model = useThreadGitControlModel(props);
   const gt = useGT();
   const messages = useMessages();
-  if (props.isMultiRepoProject) return null;
+  const reviewItem = {
+    id: "git-review",
+    title: gt("Review changes"),
+    icon: "text.bubble",
+    disabled: (!props.isMultiRepoProject && !model.isRepo) || props.hasThread === false,
+    subtitle:
+      props.hasThread === false
+        ? gt("Available after the first message")
+        : gt("Turn diffs and worktree changes"),
+    onPress: model.openReview,
+  } satisfies AppBarMenu["items"][number];
+  // A group has no repository of its own: Git actions run in each member, but Review shows them all.
+  if (props.isMultiRepoProject) {
+    return {
+      title: gt("Git controls"),
+      icon: "point.topleft.down.curvedto.point.bottomright.up",
+      separateBackground: false,
+      items: [reviewItem],
+    };
+  }
   return {
     title: gt("Git controls"),
     icon: "point.topleft.down.curvedto.point.bottomright.up",
@@ -378,17 +397,7 @@ export function useThreadGitMenuDefinition(props: ThreadGitMenuProps): AppBarMen
           void model.runQuickAction();
         },
       },
-      {
-        id: "git-review",
-        title: gt("Review changes"),
-        icon: "text.bubble",
-        disabled: !model.isRepo || props.hasThread === false,
-        subtitle:
-          props.hasThread === false
-            ? gt("Available after the first message")
-            : gt("Turn diffs and worktree changes"),
-        onPress: model.openReview,
-      },
+      reviewItem,
       ...(props.onMergeBack
         ? [
             {
