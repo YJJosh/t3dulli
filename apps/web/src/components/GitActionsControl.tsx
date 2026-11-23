@@ -1584,7 +1584,7 @@ function CheckoutGitActionsControl({
             type: "success",
             title: gt("Made a multi-repo project"),
             description: gt(
-              "New worktrees now branch {repositories} together. Edit .workler in the project folder to change the list.",
+              "New worktrees now branch {repositories} together. Change the list with Manage repositories in the project's menu.",
               { repositories: summarizeRepositories(result.value.members) },
             ),
             ...(threadToastData !== undefined ? { data: threadToastData } : {}),

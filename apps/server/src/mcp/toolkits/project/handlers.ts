@@ -566,6 +566,23 @@ export const layer = McpToolAccess.toLayer(ProjectToolkit, {
       return (yield* withSavedDefaultModel)(updated);
     }),
   ),
+  t3_project_repositories: McpToolAccess.writesEnvironment((input) =>
+    Effect.gen(function* () {
+      const projects = yield* Project.ProjectService;
+      if (input.add !== undefined && input.remove !== undefined)
+        return yield* new OrchestratorMcpFailure({
+          code: "invalid_request",
+          message: "Pass add or remove, not both.",
+        });
+      const change =
+        input.add !== undefined
+          ? projects.addMultiRepoMember(input.projectId, input.add)
+          : input.remove !== undefined
+            ? projects.removeMultiRepoMember(input.projectId, input.remove)
+            : projects.multiRepoMembers(input.projectId);
+      return yield* change.pipe(Effect.mapError(projectFailure));
+    }),
+  ),
   t3_project_delete: McpToolAccess.writesEnvironment((input) =>
     Effect.gen(function* () {
       const folders = yield* ManagedProjectFolders.ManagedProjectFolders;

@@ -323,6 +323,9 @@ const makeTestRelay = Effect.fnUntraced(function* (
     Effect.provideService(ProjectService.ProjectService, {
       makeMultiRepo: unused,
       inspectMultiRepoFolder: unused,
+      multiRepoMembers: unused,
+      addMultiRepoMember: unused,
+      removeMultiRepoMember: unused,
       create: unused,
       bootstrap: unused,
       update: unused,

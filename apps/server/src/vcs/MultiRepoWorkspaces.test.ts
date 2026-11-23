@@ -72,6 +72,36 @@ it.layer(TestLayer)("MultiRepoWorkspaces", (it) => {
     }).pipe(Effect.scoped),
   );
 
+  it.effect("adds a repository in the folder and removes a member, keeping its folder", () =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const path = yield* Path.Path;
+      const workspaces = yield* MultiRepoWorkspaces.MultiRepoWorkspaces;
+      const group = yield* makeGroup;
+      const docs = path.join(group, "docs");
+      yield* fileSystem.makeDirectory(docs);
+      yield* git(docs, ["init", "--initial-branch=main"]);
+      assert.deepEqual(yield* workspaces.undeclaredRepositories(group, ["api", "web"]), ["docs"]);
+      const before = yield* workspaces.createWorkspace({
+        cwd: group,
+        refName: "main",
+        newRefName: "before",
+        path: null,
+      });
+
+      assert.deepEqual(yield* workspaces.addMember(group, "docs"), ["api", "web", "docs"]);
+      assert.deepEqual(yield* workspaces.removeMember(group, "web"), ["api", "docs"]);
+      assert.isTrue(yield* fileSystem.exists(path.join(group, "web", "README.md")));
+      assert.deepEqual(yield* workspaces.undeclaredRepositories(group, ["api", "docs"]), ["web"]);
+      // A workspace made before keeps the members it was made with, and still goes without force.
+      assert.deepEqual(yield* workspaces.members(before.worktree.path), ["api", "web"]);
+      yield* workspaces.removeWorkspace({ cwd: group, path: before.worktree.path });
+      assert.isFalse(yield* fileSystem.exists(before.worktree.path));
+      const refused = yield* Effect.flip(workspaces.removeMember(group, "missing"));
+      assert.include(refused.detail, "not a project of this group");
+    }),
+  );
+
   it.effect("makes a plain folder of repositories a group, and refuses anything else", () =>
     Effect.gen(function* () {
       const fileSystem = yield* FileSystem.FileSystem;
@@ -343,10 +373,14 @@ it.layer(TestLayer)("MultiRepoWorkspaces", (it) => {
         .pipe(Effect.flip);
       assert.include(missing.detail, "feature/login");
       assert.isFalse(yield* fileSystem.exists(workspace));
+      const checkpoint = "refs/t3/orchestration-v2/checkpoints/scope/ordinal/0";
       for (const member of ["api", "web"]) {
         yield* git(path.join(group, member), ["branch", "feature/login"]);
+        // Where removing the workspace copied its checkpoints.
+        yield* git(path.join(group, member), ["update-ref", checkpoint, "HEAD"]);
       }
-      // A thread whose workspace vanished gets the same folder back on its branch.
+      // A thread whose workspace vanished gets the same folder back on its branch, with the
+      // checkpoints Edit from here restores.
       const recreated = yield* workspaces.createWorkspace({
         cwd: group,
         refName: "feature/login",
@@ -354,6 +388,9 @@ it.layer(TestLayer)("MultiRepoWorkspaces", (it) => {
       });
       assert.equal(recreated.worktree.path, workspace);
       assert.deepEqual(yield* currentBranches(workspace), ["feature/login", "feature/login"]);
+      for (const member of ["api", "web"]) {
+        yield* git(path.join(workspace, member), ["rev-parse", "--verify", checkpoint]);
+      }
     }).pipe(Effect.scoped),
   );
 

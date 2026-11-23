@@ -441,6 +441,20 @@ the group falls back to its members' current local branches. A delegated task's 
 workspace instead starts each member at the commit its parent agent has checked out, so it
 sees committed work but not uncommitted changes. An agent moving its thread from the group
 root into a workspace does the same unless it starts from the remote (the server default).
-A base branch it names is ignored, since the members share no branch. Git actions at the group
-root are hidden: run repository-specific Git operations in a member folder. Group membership lives in the folder's `.workler`
-file, so it travels with the project rather than being tied to one machine's database.
+A base branch it names is ignored, since the members share no branch.
+
+Each turn takes a checkpoint in every member, so the changed-files card, the **Diff** panel and
+**Edit from here** cover all of them. The Diff panel shows one combined diff with each member's
+files under its folder, and compares each member with its own default branch. The thread details
+panel shows the branch the members share and each member's changes. When a member has a pull
+request for the thread's branch, it appears under **Linked items**, one per member; dismiss one to
+keep it off the thread. Commit, push and pull request actions stay hidden at the group level: run
+them in a member folder, or ask the agent, which can open a member's pull request.
+
+To add or remove a repository, choose **Manage repositories** in the project's or a thread's menu,
+the thread details panel or the command palette. You can add a repository already in the project
+folder, or clone one into it. Removing a repository leaves its folder in place. Worktrees made
+before a change keep the repositories they were made with; only new ones get the change. Group
+membership lives in the folder's `.workler` file, so it travels with the folder rather than with
+T3 Code's database. A change on one machine does not reach copies of the project on other
+machines: make the same change there. Until you do, those copies can show as separate projects.

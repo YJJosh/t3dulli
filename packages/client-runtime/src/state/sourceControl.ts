@@ -90,6 +90,10 @@ export function createSourceControlEnvironmentAtoms<R, E>(
       label: "environment-data:source-control:project-clones",
       tag: WS_METHODS.subscribeProjectClones,
     }),
+    cloneRepository: createEnvironmentRpcCommand(runtime, {
+      label: "environment-data:source-control:clone-repository",
+      tag: WS_METHODS.sourceControlCloneRepository,
+    }),
     publishRepository: createEnvironmentRpcCommand(runtime, {
       label: "environment-data:source-control:publish-repository",
       tag: WS_METHODS.sourceControlPublishRepository,

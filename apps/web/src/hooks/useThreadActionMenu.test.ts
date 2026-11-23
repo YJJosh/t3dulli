@@ -71,15 +71,13 @@ vi.mock("../state/environments", () => ({
   usePrimaryEnvironmentId: () => "primary",
   readEnvironments: () => [],
 }));
-vi.mock("../commandPaletteBus", () => ({
-  openCommandPalette: (detail: unknown) => {
-    state.setupOpenedWith = detail;
-    recordEffect("multi-repo-setup");
-  },
-}));
 vi.mock("../multiRepoSetupMenu", () => ({
   buildMultiRepoProjectSetupMenu: () => state.setupMenu,
   isMultiRepoSetupMenuId: (id: string | null) => id?.startsWith("multi-repo-setup:") === true,
+  runMultiRepoSetupMenuAction: (menu: { setupsByAction: Map<string, unknown> }, id: string) => {
+    state.setupOpenedWith = { multiRepoSetup: menu.setupsByAction.get(id) };
+    recordEffect("multi-repo-setup");
+  },
 }));
 vi.mock("../state/threads", () => ({ threadEnvironment: { updateMetadata: "metadata" } }));
 vi.mock("../state/use-atom-command", () => ({

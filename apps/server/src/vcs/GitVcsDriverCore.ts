@@ -45,6 +45,7 @@ import { parseT3ProjectFile } from "@t3tools/shared/t3ProjectFile";
 import { resolveProjectFileBackedSetting } from "@t3tools/shared/projectSettings";
 import { gitCommandDuration, gitCommandsTotal, withMetrics } from "../observability/Metrics.ts";
 import * as GitVcsDriver from "./GitVcsDriver.ts";
+import { prefixedPatchRenderArgs, prefixPatchHeaders } from "./prefixDiffPaths.ts";
 import { removeEmptyDirectory, type RemoveEmptyDirectoryError } from "./removeEmptyDirectory.ts";
 import { VcsAutomaticFetchInterval } from "./VcsAutomaticFetchInterval.ts";
 import {
@@ -109,7 +110,7 @@ const REVIEW_BRANCH_COMMIT_MAX_OUTPUT_BYTES = 128 * 1024;
 // Client patch parsers require a/ and b/ prefixes; override user diff prefix settings.
 export const PATCH_RENDER_PREFIX_ARGS = ["--src-prefix=a/", "--dst-prefix=b/"] as const;
 // Client patch parsers drop blank context lines under diff.suppressBlankEmpty and summaries under diff.submodule.
-const REVIEW_DIFF_ARGS = [
+const reviewDiffArgs = (pathPrefix: string | undefined) => [
   "-c",
   "diff.suppressBlankEmpty=false",
   "diff",
@@ -118,7 +119,7 @@ const REVIEW_DIFF_ARGS = [
   "--no-ext-diff",
   "--no-textconv",
   "--submodule=short",
-  ...PATCH_RENDER_PREFIX_ARGS,
+  ...(pathPrefix === undefined ? PATCH_RENDER_PREFIX_ARGS : prefixedPatchRenderArgs(pathPrefix)),
 ];
 const STATUS_UPSTREAM_REFRESH_INTERVAL = Duration.seconds(15);
 const STATUS_UPSTREAM_REFRESH_TIMEOUT = Duration.seconds(5);
@@ -4318,6 +4319,33 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
 
   const getReviewDiffPreview = Effect.fn("getReviewDiffPreview")(function* (
     input: ReviewDiffPreviewInput,
+    options?: GitVcsDriver.ReviewDiffPreviewOptions,
+  ) {
+    const result = yield* readReviewDiffPreview(input, options);
+    const prefix = options?.pathPrefix;
+    if (prefix === undefined) return result;
+    const prefixed = (path: string) => `${prefix}/${path}`;
+    return {
+      ...result,
+      sources: result.sources.map((source) => ({
+        ...source,
+        diff: prefixPatchHeaders(source.diff, prefix),
+        ...(source.files === undefined
+          ? {}
+          : {
+              files: source.files.map((file) => ({
+                ...file,
+                path: prefixed(file.path),
+                previousPath: file.previousPath === null ? null : prefixed(file.previousPath),
+              })),
+            }),
+      })),
+    };
+  });
+
+  const readReviewDiffPreview = Effect.fn("readReviewDiffPreview")(function* (
+    input: ReviewDiffPreviewInput,
+    options?: GitVcsDriver.ReviewDiffPreviewOptions,
   ) {
     const pathArgs = input.file
       ? [input.file.path, ...(input.file.previousPath ? [input.file.previousPath] : [])].map(
@@ -4368,7 +4396,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
       const commit = yield* resolveReviewCommit(cwd, input.commitSha);
       const { subject } = yield* readReviewCommitMessage(cwd, commit.sha);
       const diffArgs = [
-        ...REVIEW_DIFF_ARGS,
+        ...reviewDiffArgs(options?.pathPrefix),
         ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
       ];
       const stat = yield* executeGit(
@@ -4416,7 +4444,7 @@ export const makeGitVcsDriverCore = Effect.fn("makeGitVcsDriverCore")(function* 
         : yield* resolveReviewMergeBase(cwd, repository.currentBranch, input.baseRef);
 
     const diffArgs = [
-      ...REVIEW_DIFF_ARGS,
+      ...reviewDiffArgs(options?.pathPrefix),
       ...(input.ignoreWhitespace ? ["--ignore-all-space"] : []),
     ];
     const readStats = Effect.fn("GitVcsDriver.getReviewDiffPreview.stat")(function* (

@@ -5147,6 +5147,7 @@ const makeOrchestrator = Effect.fn("orchestrationV2.Orchestrator.layer")(functio
                     repositoryWebUrl: command.repositoryWebUrl,
                   }),
                   source: command.source,
+                  ...(command.member !== undefined && { member: command.member }),
                   linkedAt: DateTime.formatIso(now),
                   snapshot: null,
                   stack: null,

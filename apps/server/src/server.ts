@@ -490,6 +490,7 @@ const layerKnownWorkspaces = KnownWorkspaces.layer.pipe(
 );
 
 const layerReview = ReviewService.layer.pipe(
+  Layer.provide(layerMultiRepoWorkspaces),
   Layer.provideMerge(layerKnownWorkspaces),
   Layer.provideMerge(GitVcsDriver.layer),
   Layer.provideMerge(layerVcsDriverRegistry),
@@ -519,7 +520,10 @@ const layerVcs = Layer.empty.pipe(
   ),
 );
 
-const layerCheckpointStore = CheckpointStore.layer.pipe(Layer.provide(layerVcsDriverRegistry));
+const layerCheckpointStore = CheckpointStore.layer.pipe(
+  Layer.provide(layerVcsDriverRegistry),
+  Layer.provide(layerMultiRepoWorkspaces),
+);
 
 const layerPortScanner = PortScanner.layer.pipe(
   Layer.provide(ProcessRunner.layer),

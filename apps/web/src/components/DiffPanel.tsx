@@ -278,9 +278,12 @@ export default function DiffPanel({
         })
       : null,
   );
-  const activeRepositoryRoot =
-    gitStatusQuery.data?.workingTree.rootPath ??
-    (activeThread?.worktreePath ? undefined : activeProject?.repositoryIdentity?.rootPath);
+  // A multi-repo group names its members' files from the group folder, under each member's folder.
+  const isMultiRepo = activeProject?.multiRepo != null;
+  const activeRepositoryRoot = isMultiRepo
+    ? activeCwd
+    : (gitStatusQuery.data?.workingTree.rootPath ??
+      (activeThread?.worktreePath ? undefined : activeProject?.repositoryIdentity?.rootPath));
   const diffSelection = useDiffPanelStore((state) =>
     selectThreadDiffPanelSelection(state.byThreadKey, routeThreadRef),
   );
@@ -305,7 +308,7 @@ export default function DiffPanel({
       : null,
   );
   const toolCallItem = toolCallDetail.data?.item;
-  const isGitRepo = gitStatusQuery.data?.isRepo ?? true;
+  const isGitRepo = isMultiRepo || (gitStatusQuery.data?.isRepo ?? true);
   const turnDiffSummaries = useThreadCheckpointSummaries(routeThreadRef);
   const orderedTurnDiffSummaries = turnDiffSummaries.toSorted((left, right) => {
     if (left.checkpointTurnCount !== right.checkpointTurnCount) {
@@ -568,7 +571,9 @@ export default function DiffPanel({
     }
     return currentLoadDiffFiles(fileDiff);
   });
-  const canSelectBranchBase = canReadFiles && canRefreshGitDiff && selectedGitScope === "branch";
+  // Each member of a group compares against its own base branch.
+  const canSelectBranchBase =
+    canReadFiles && canRefreshGitDiff && selectedGitScope === "branch" && !isMultiRepo;
   const branchRefsCwd = branchDiffPreview.data?.cwd ?? activeCwd;
   const localBranchRefs = useEnvironmentQuery(
     canSelectBranchBase && activeThread && branchRefsCwd

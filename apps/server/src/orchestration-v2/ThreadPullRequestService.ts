@@ -24,12 +24,15 @@ import * as Stream from "effect/Stream";
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as MultiRepoWorkspaces from "../vcs/MultiRepoWorkspaces.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as PullRequestService from "../pullRequest/PullRequestService.ts";
+import { resolveTarget } from "../pullRequest/pullRequestTarget.ts";
 import { makeLinkedThreadsChangeDetector } from "../pullRequest/linkedThreads.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
 import { forkParked } from "../serverActivation.ts";
 import { sourceControlDefinitions } from "../sourceControl/sourceControlDefinitions.ts";
+import { threadPullRequestKeysEqual } from "../sourceControl/threadPullRequests.ts";
 import { makeNoPullRequestRechecks } from "./noPullRequestRechecks.ts";
 import * as Orchestrator from "./Orchestrator.ts";
 
@@ -123,6 +126,7 @@ export const make = Effect.gen(function* () {
   const fileSystem = yield* FileSystem.FileSystem;
   const path = yield* Path.Path;
   const backgroundPolicy = yield* BackgroundPolicy.BackgroundPolicy;
+  const multiRepo = yield* Effect.serviceOption(MultiRepoWorkspaces.MultiRepoWorkspaces);
   const pendingBackfill = new Map<ThreadId, number>();
   const noPullRequestRechecks = makeNoPullRequestRechecks();
 
@@ -142,6 +146,72 @@ export const make = Effect.gen(function* () {
     orchestrator.getPullRequestSnapshot(
       threadId === null ? { unsettledOnly: !(backfill || pendingBackfill.size > 0) } : { threadId },
     );
+
+  // A multi-repo group has no repository of its own: each member may hold a pull request for
+  // the shared branch. They join the thread's links as stack members do, so a dismissed one stays
+  // dismissed.
+  const discoverGroupPullRequests = Effect.fn("ThreadPullRequestServiceV2.discoverGroup")(
+    function* (input: {
+      readonly group: ReadonlyArray<
+        Pick<OrchestrationV2ThreadShell, "id" | "createdAt" | "pullRequests">
+      >;
+      readonly cwd: string;
+      readonly members: ReadonlyArray<string>;
+      readonly branch: string;
+      readonly refresh: boolean;
+    }) {
+      const found = yield* Effect.forEach(
+        input.members,
+        (member) =>
+          git
+            .branchPullRequest(
+              { cwd: path.join(input.cwd, member), branch: input.branch },
+              { refresh: input.refresh, confirmTerminal: false },
+            )
+            .pipe(
+              Effect.flatMap((detected) =>
+                detected === null
+                  ? Effect.succeed(null)
+                  : resolveTarget({ url: detected.url }, undefined).pipe(
+                      Effect.map((target) => ({ detected, target })),
+                    ),
+              ),
+              Effect.catchCauseIf(
+                (cause) => !Cause.hasInterruptsOnly(cause),
+                (cause) =>
+                  Effect.logWarning("multi-repo member pull request lookup failed", {
+                    member,
+                    cause: Cause.pretty(cause),
+                  }).pipe(Effect.as(null)),
+              ),
+            ),
+        { concurrency: 4 },
+      );
+      for (const [index, entry] of found.entries()) {
+        if (entry === null) continue;
+        const { detected, target } = entry;
+        for (const thread of input.group) {
+          // Dismissed links stay as tombstones, so a dismissed one is never added back.
+          if ((thread.pullRequests ?? []).some((link) => threadPullRequestKeysEqual(link, target)))
+            continue;
+          if (pullRequestPredatesThread(detected, thread.createdAt)) continue;
+          const uuid = yield* random.uuidV4();
+          yield* orchestrator.dispatch({
+            type: "thread.pull-request.link",
+            commandId: CommandId.make(`server:thread-pull-request-member:${thread.id}:${uuid}`),
+            threadId: thread.id,
+            host: target.host,
+            repository: target.repository,
+            number: target.number,
+            url: target.url,
+            source: "stack",
+            member: input.members[index]!,
+          });
+        }
+      }
+      return found.some((entry) => entry !== null);
+    },
+  );
 
   const synchronize = Effect.fn("ThreadPullRequestServiceV2.synchronize")(function* (
     request: RefreshRequest,
@@ -216,6 +286,23 @@ export const make = Effect.gen(function* () {
           const project = projects.get(first.projectId);
           if (project === undefined) return finishBackfill(group);
           if (scheduled.has(key) && !scheduledLookups.has(key)) return;
+          const groupCwd = first.worktreePath ?? project.workspaceRoot;
+          const members = Option.isSome(multiRepo)
+            ? yield* multiRepo.value.members(groupCwd)
+            : null;
+          if (members !== null) {
+            if (first.branch !== null) {
+              const anyFound = yield* discoverGroupPullRequests({
+                group,
+                cwd: groupCwd,
+                members,
+                branch: first.branch,
+                refresh: request.refresh,
+              });
+              noPullRequestRechecks.record(key, nowMs, anyFound);
+            }
+            return finishBackfill(group);
+          }
           const { project: resolvedProject, repository } =
             yield* resolveProjectForPullRequestDiscovery(project, repositoryIdentities, {
               refresh: request.refresh,

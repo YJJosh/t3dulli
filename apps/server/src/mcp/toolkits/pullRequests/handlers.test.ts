@@ -28,6 +28,7 @@ import * as Stream from "effect/Stream";
 import type { Tool } from "effect/ai";
 
 import * as GitManager from "../../../git/GitManager.ts";
+import * as MultiRepoWorkspaces from "../../../vcs/MultiRepoWorkspaces.ts";
 import * as Orchestrator from "../../../orchestration-v2/Orchestrator.ts";
 import {
   type PullRequestTestThread,
@@ -155,6 +156,8 @@ interface HarnessOptions {
   >;
   readonly pullRequests?: Partial<PullRequestService.PullRequestService["Service"]>;
   readonly git?: Partial<GitManager.GitManager["Service"]>;
+  /** Members a checkout lists in its own `.workler`. */
+  readonly checkoutMembers?: (cwd: string) => ReadonlyArray<string> | null;
 }
 
 const NO_GUIDE: PullRequestReviewGuideResult = { guide: null, run: null, currentHeadSha: "head-1" };
@@ -209,6 +212,9 @@ const makeHarness = Effect.fn("makePullRequestsToolkitHarness")(function* (
     }),
     Layer.mock(PullRequestService.PullRequestService)(options.pullRequests ?? {}),
     Layer.mock(GitManager.GitManager)(options.git ?? {}),
+    Layer.mock(MultiRepoWorkspaces.MultiRepoWorkspaces)({
+      members: (cwd) => Effect.succeed(options.checkoutMembers?.(cwd) ?? null),
+    }),
     Layer.succeed(SecureRandom.SecureRandom, testCrypto),
     McpToolAccessTestkit.liveThreadsLayer,
   );
@@ -769,6 +775,43 @@ describe("pull request guide tools", () => {
       }),
   );
 
+  it.effect("files a member's pull request under the caller's multi-repo project", () =>
+    Effect.gen(function* () {
+      const group = {
+        ...makeProject(null),
+        multiRepo: {
+          members: [
+            { path: "api", remoteUrl: "git@github.com:Acme/API.git" },
+            { path: "web", remoteUrl: "https://github.com/acme/web.git" },
+          ],
+        },
+      };
+      // The same repository open on its own must not take a PR the group's thread names.
+      const standalone = {
+        ...makeProject({
+          canonicalKey: "github.com/acme/api",
+          locator: {
+            source: "git-remote",
+            remoteName: "origin",
+            remoteUrl: "git@github.com:acme/api.git",
+          },
+          provider: SourceControlProviderKind.make("github"),
+          displayName: "acme/api",
+          owner: "acme",
+          name: "api",
+        }),
+        id: ProjectId.make("project-api"),
+      };
+      const harness = yield* makeHarness({ projects: [standalone, group] });
+      yield* harness.call("write_pull_request_guides", {
+        pullRequests: [{ url: "https://github.com/acme/api/pull/9" }],
+      });
+      expect((yield* Ref.get(harness.guideRequests)).map((ref) => ref.projectId)).toEqual([
+        PROJECT_ID,
+      ]);
+    }),
+  );
+
   it.effect("finds an Azure DevOps checkout for a pull request named by its full path", () =>
     Effect.gen(function* () {
       const azure = {
@@ -1145,6 +1188,56 @@ describe("source control tools", () => {
       expect(yield* Ref.get(harness.commands)).toMatchObject([
         { type: "thread.pull-request.link", number: 43, source: "created" },
       ]);
+    }),
+  );
+
+  it.effect("opens a multi-repo thread's PR from the member it names", () =>
+    Effect.gen(function* () {
+      const opened: Array<string> = [];
+      const group = {
+        ...makeProject(null),
+        multiRepo: {
+          members: [
+            { path: "api", remoteUrl: "git@github.com:acme/api.git" },
+            { path: "docs", remoteUrl: "git@github.com:acme/docs.git" },
+          ],
+        },
+      };
+      const harness = yield* makeHarness({
+        project: group,
+        thread: { ...makeThread([]), worktreePath: "/workspace/group/.worktrees/feature" },
+        // The workspace was made before `web` left the project and `docs` joined it.
+        checkoutMembers: (cwd) =>
+          cwd === "/workspace/group/.worktrees/feature" ? ["api", "web"] : null,
+        git: {
+          createPullRequest: (input) =>
+            Effect.sync(() => opened.push(input.cwd)).pipe(
+              Effect.as({
+                status: "created" as const,
+                url: "https://github.com/acme/api/pull/5",
+                number: 5,
+                baseBranch: "main",
+                headBranch: "feature",
+                title: input.title,
+              }),
+            ),
+        },
+      });
+      const unnamed = yield* harness
+        .call("pull_request_create", { title: "Add tools", body: "Adds tools." })
+        .pipe(Effect.flip);
+      expect(String(unnamed)).toContain("Pass member: one of api, web.");
+      const missing = yield* harness
+        .call("pull_request_create", { title: "Add tools", body: "Adds tools.", member: "docs" })
+        .pipe(Effect.flip);
+      expect(String(missing)).toContain("Pass member: one of api, web.");
+      const result = yield* harness.call("pull_request_create", {
+        title: "Add tools",
+        body: "Adds tools.",
+        member: "web",
+      });
+      expect(result).toMatchObject({ number: 5, created: true });
+      expect(opened).toEqual(["/workspace/group/.worktrees/feature/web"]);
     }),
   );
 

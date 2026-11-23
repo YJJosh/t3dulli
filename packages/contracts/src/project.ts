@@ -567,6 +567,34 @@ export const ProjectMakeMultiRepoResult = Schema.Struct({
 });
 export type ProjectMakeMultiRepoResult = typeof ProjectMakeMultiRepoResult.Type;
 
+export const ProjectMultiRepoMembersInput = Schema.Struct({
+  projectId: ProjectId,
+});
+export type ProjectMultiRepoMembersInput = typeof ProjectMultiRepoMembersInput.Type;
+
+export const ProjectMultiRepoMembersResult = Schema.Struct({
+  /** The repositories the project's `.workler` lists, in file order. */
+  members: Schema.Array(TrimmedNonEmptyString),
+  /** Repositories inside the project folder that it does not list yet. */
+  candidates: Schema.Array(TrimmedNonEmptyString),
+});
+export type ProjectMultiRepoMembersResult = typeof ProjectMultiRepoMembersResult.Type;
+
+/** Lists a repository inside a multi-repo project's folder. Workspaces made before keep theirs. */
+export const ProjectAddMultiRepoMemberInput = Schema.Struct({
+  projectId: ProjectId,
+  /** `/`-separated folder inside the project. */
+  path: TrimmedNonEmptyString,
+});
+export type ProjectAddMultiRepoMemberInput = typeof ProjectAddMultiRepoMemberInput.Type;
+
+/** Stops listing a repository in a multi-repo project. Its folder stays where it is. */
+export const ProjectRemoveMultiRepoMemberInput = Schema.Struct({
+  projectId: ProjectId,
+  path: TrimmedNonEmptyString,
+});
+export type ProjectRemoveMultiRepoMemberInput = typeof ProjectRemoveMultiRepoMemberInput.Type;
+
 /** Looks at a folder picked for a new multi-repo project, without writing anything. */
 export const ProjectInspectMultiRepoFolderInput = Schema.Struct({
   path: TrimmedNonEmptyString,

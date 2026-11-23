@@ -1263,7 +1263,11 @@ const make = Effect.gen(function* () {
         path.dirname(path.dirname(worktreePath)),
         MultiRepoWorkspaces.WORKLER_CONFIG_FILE,
       );
-      if ((yield* fs.readFileString(configPath)) !== (yield* fs.readFileString(originalConfig)))
+      // A workspace keeps the members it was made with when the group's list changes later.
+      if (
+        MultiRepoWorkspaces.withoutProjectLines(yield* fs.readFileString(configPath)) !==
+        MultiRepoWorkspaces.withoutProjectLines(yield* fs.readFileString(originalConfig))
+      )
         return false;
       const memberSegments = members.map((member) => member.split(/[\\/]/));
       const startsWith = (member: ReadonlyArray<string>, prefix: ReadonlyArray<string>) =>
@@ -2059,6 +2063,27 @@ const make = Effect.gen(function* () {
         targets.set(key, owned);
       }
     }
+    // A multi-repo group keeps its checkpoints in every member, and its root members
+    // also receive those of the workspaces removed from it. A repository removed from the
+    // group stays in its folder with the refs it got before.
+    // Copied first: the loop adds members, which are never groups themselves.
+    const owners = Array.from(targets);
+    for (const [cwd, prefixes] of owners) {
+      if (
+        Option.isNone(multiRepo) ||
+        !(yield* fs.exists(cwd).pipe(Effect.orElseSucceed(() => false)))
+      )
+        continue;
+      const members = yield* multiRepo.value.members(cwd);
+      if (members === null) continue;
+      const formerMembers = yield* multiRepo.value.undeclaredRepositories(cwd, members);
+      for (const member of [...members, ...formerMembers]) {
+        const key = path.join(cwd, member);
+        const owned = targets.get(key) ?? new Set<string>();
+        for (const prefix of prefixes) owned.add(prefix);
+        targets.set(key, owned);
+      }
+    }
     const repositories = new Map<string, { cwd: string; prefixes: Set<string> }>();
     for (const [cwd, prefixes] of targets) {
       yield* Effect.gen(function* () {
@@ -2097,7 +2122,8 @@ const make = Effect.gen(function* () {
           const ordinalStart = ref.lastIndexOf("/") + 1;
           return (
             prefixes.has(ref.slice(0, ordinalStart)) &&
-            /^(0|[1-9]\d*)$/.test(ref.slice(ordinalStart))
+            // A restore's undo point, left by a server that stopped mid-restore, goes too.
+            /^(0|[1-9]\d*)(-restore-undo)?$/.test(ref.slice(ordinalStart))
           );
         });
         if (refs.length === 0) return;

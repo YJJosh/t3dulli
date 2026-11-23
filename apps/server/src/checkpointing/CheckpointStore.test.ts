@@ -16,6 +16,7 @@ import { describe, expect } from "vite-plus/test";
 import * as Base64Url from "effect/encoding/Base64Url";
 import { parseTurnDiffFilesFromNumstat } from "./Diffs.ts";
 import * as CheckpointStore from "./CheckpointStore.ts";
+import * as MultiRepoWorkspaces from "../vcs/MultiRepoWorkspaces.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as ServerConfig from "../config.ts";
@@ -698,4 +699,175 @@ it.layer(layerTest)("CheckpointStore.layer", (it) => {
       }),
     );
   });
+});
+
+// Folders named `group` are multi-repo groups; `group-docs` also has a member added later.
+const layerGroupTest = CheckpointStore.layer.pipe(
+  Layer.provide(
+    Layer.mock(MultiRepoWorkspaces.MultiRepoWorkspaces)({
+      members: (cwd) =>
+        Effect.succeed(
+          NodePath.basename(cwd) === "group"
+            ? ["api", "web"]
+            : NodePath.basename(cwd) === "group-docs"
+              ? ["api", "docs"]
+              : null,
+        ),
+    }),
+  ),
+  Layer.provideMerge(layerVcsDriverTest),
+  Layer.provideMerge(layerVcsProcessTest),
+  Layer.provideMerge(layerServerConfig),
+  Layer.provideMerge(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+);
+
+it.layer(layerGroupTest)("CheckpointStore.layer for a multi-repo group", (it) => {
+  const makeGroup = (name: string, members: ReadonlyArray<string>) =>
+    Effect.gen(function* () {
+      const fileSystem = yield* FileSystem.FileSystem;
+      const group = NodePath.join(yield* makeTmpDir(), name);
+      for (const member of members) {
+        yield* fileSystem.makeDirectory(NodePath.join(group, member), { recursive: true });
+        yield* initRepoWithCommit(NodePath.join(group, member));
+      }
+      return group;
+    });
+
+  it.effect("checkpoints, diffs and restores every member under its folder", () =>
+    Effect.gen(function* () {
+      const group = yield* makeGroup("group", ["api", "web"]);
+      const store = yield* CheckpointStore.CheckpointStore;
+      const threadId = ThreadId.make("thread-group");
+      const before = checkpointRefForThreadTurn(threadId, 0);
+      const after = checkpointRefForThreadTurn(threadId, 1);
+
+      expect(yield* store.isGitRepository(group)).toBe(true);
+      // A group whose clones are gone is no checkout, though its `.workler` lists them.
+      const emptied = NodePath.join(yield* makeTmpDir(), "group");
+      yield* (yield* FileSystem.FileSystem).makeDirectory(emptied);
+      expect(yield* store.isGitRepository(emptied)).toBe(false);
+      yield* store.captureCheckpoint({ cwd: group, checkpointRef: before });
+      yield* writeTextFile(NodePath.join(group, "api", "README.md"), "# api\n");
+      yield* git(NodePath.join(group, "web"), ["mv", "README.md", "GUIDE.md"]);
+      yield* writeTextFile(NodePath.join(group, "web", "new file.txt"), "new\n");
+      yield* store.captureCheckpoint({ cwd: group, checkpointRef: after });
+
+      const refs = { cwd: group, fromCheckpointRef: before, toCheckpointRef: after };
+      const numstat = yield* store.diffCheckpoints({
+        ...refs,
+        ignoreWhitespace: false,
+        format: "numstat",
+      });
+      expect(parseTurnDiffFilesFromNumstat(numstat)).toEqual([
+        { path: "api/README.md", additions: 1, deletions: 1 },
+        { path: "web/GUIDE.md", previousPath: "web/README.md", additions: 0, deletions: 0 },
+        { path: "web/new file.txt", additions: 1, deletions: 0 },
+      ]);
+      const patch = yield* store.diffCheckpoints({ ...refs, ignoreWhitespace: false });
+      expect(patch).toContain("diff --git a/api/README.md b/api/README.md");
+      expect(patch).toContain("rename from web/README.md\nrename to web/GUIDE.md");
+      expect(patch).toContain("+++ b/web/new file.txt");
+      expect(yield* store.listAuthoredPaths(refs)).toBeNull();
+
+      const webOnly = yield* store.diffCheckpoints({
+        ...refs,
+        ignoreWhitespace: false,
+        filePaths: ["web/new file.txt"],
+      });
+      expect(webOnly).toContain("b/web/new file.txt");
+      expect(webOnly).not.toContain("api/README.md");
+
+      expect(yield* store.restoreCheckpoint({ cwd: group, checkpointRef: before })).toBe(true);
+      const fileSystem = yield* FileSystem.FileSystem;
+      expect(yield* fileSystem.readFileString(NodePath.join(group, "api", "README.md"))).toBe(
+        "# test\n",
+      );
+      expect(yield* fileSystem.exists(NodePath.join(group, "web", "new file.txt"))).toBe(false);
+
+      yield* store.deleteCheckpointRefs({ cwd: group, checkpointRefs: [before] });
+      expect(yield* store.hasCheckpointRef({ cwd: group, checkpointRef: before })).toBe(false);
+      expect(
+        yield* git(NodePath.join(group, "web"), ["for-each-ref", "--format=%(refname)", before]),
+      ).toBe("");
+    }),
+  );
+
+  it.effect(
+    "keeps what members recorded when a member joins, and restores the members that have it",
+    () =>
+      Effect.gen(function* () {
+        const group = yield* makeGroup("group-docs", ["api", "docs"]);
+        const store = yield* CheckpointStore.CheckpointStore;
+        const threadId = ThreadId.make("thread-group-docs");
+        const before = checkpointRefForThreadTurn(threadId, 0);
+        const after = checkpointRefForThreadTurn(threadId, 1);
+        const fileSystem = yield* FileSystem.FileSystem;
+        const readme = (member: string) =>
+          fileSystem.readFileString(NodePath.join(group, member, "README.md"));
+        // As if `docs` joined the group after the first checkpoint.
+        yield* store.captureCheckpoint({ cwd: NodePath.join(group, "api"), checkpointRef: before });
+        yield* writeTextFile(NodePath.join(group, "api", "README.md"), "# api\n");
+        expect(yield* store.hasCheckpointRef({ cwd: group, checkpointRef: before })).toBe(false);
+        // A baseline taken again fills in `docs` and leaves what `api` recorded.
+        yield* store.captureCheckpoint({ cwd: group, checkpointRef: before, onlyMissing: true });
+        expect(yield* store.hasCheckpointRef({ cwd: group, checkpointRef: before })).toBe(true);
+        yield* store.captureCheckpoint({ cwd: group, checkpointRef: after });
+        const numstat = yield* store.diffCheckpoints({
+          cwd: group,
+          fromCheckpointRef: before,
+          toCheckpointRef: after,
+          ignoreWhitespace: false,
+          format: "numstat",
+        });
+        expect(parseTurnDiffFilesFromNumstat(numstat).map((file) => file.path)).toEqual([
+          "api/README.md",
+        ]);
+
+        // An earlier checkpoint `docs` never saw restores `api` and leaves `docs` alone.
+        const earlier = checkpointRefForThreadTurn(threadId, 2);
+        yield* git(NodePath.join(group, "api"), ["update-ref", earlier, before]);
+        yield* writeTextFile(NodePath.join(group, "docs", "README.md"), "# docs later\n");
+        expect(yield* store.canRestoreCheckpoint({ cwd: group, checkpointRef: earlier })).toBe(
+          true,
+        );
+        expect(yield* store.restoreCheckpoint({ cwd: group, checkpointRef: earlier })).toBe(true);
+        expect(yield* readme("api")).toBe("# test\n");
+        expect(yield* readme("docs")).toBe("# docs later\n");
+        const nowhere = checkpointRefForThreadTurn(threadId, 3);
+        expect(yield* store.canRestoreCheckpoint({ cwd: group, checkpointRef: nowhere })).toBe(
+          false,
+        );
+        expect(yield* store.restoreCheckpoint({ cwd: group, checkpointRef: nowhere })).toBe(false);
+      }),
+  );
+
+  it.effect("puts every member back when one of them cannot be restored", () =>
+    Effect.gen(function* () {
+      const group = yield* makeGroup("group", ["api", "web"]);
+      const store = yield* CheckpointStore.CheckpointStore;
+      const fileSystem = yield* FileSystem.FileSystem;
+      const checkpoint = checkpointRefForThreadTurn(ThreadId.make("thread-group-undo"), 0);
+      yield* store.captureCheckpoint({ cwd: group, checkpointRef: checkpoint });
+      yield* writeTextFile(NodePath.join(group, "api", "README.md"), "# api work\n");
+      yield* writeTextFile(NodePath.join(group, "web", "README.md"), "# web work\n");
+      // Another Git process holds web's index, so its restore fails after api's succeeded.
+      yield* writeTextFile(NodePath.join(group, "web", ".git", "index.lock"), "");
+      const failed = yield* Effect.exit(
+        store.restoreCheckpoint({ cwd: group, checkpointRef: checkpoint }),
+      );
+      expect(
+        failed._tag === "Failure" || (failed._tag === "Success" && failed.value === false),
+      ).toBe(true);
+      expect(yield* fileSystem.readFileString(NodePath.join(group, "api", "README.md"))).toBe(
+        "# api work\n",
+      );
+      expect(
+        yield* git(NodePath.join(group, "api"), [
+          "for-each-ref",
+          "--format=%(refname)",
+          `${checkpoint}-restore-undo`,
+        ]),
+      ).toBe("");
+    }),
+  );
 });

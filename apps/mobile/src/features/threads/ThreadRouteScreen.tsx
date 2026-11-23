@@ -830,7 +830,8 @@ function ThreadRouteContent(
         ? () => void handleMergeBack()
         : undefined,
     currentBranch: selectedThread?.branch ?? null,
-    isMultiRepoProject: selectedThreadProject?.multiRepo != null,
+    multiRepoMembers:
+      selectedThreadProject?.multiRepo?.members.map((member) => member.path) ?? null,
     gitStatus: gitStatus.data,
     gitOperationLabel: gitState.gitOperationLabel,
     canOpenTerminal:

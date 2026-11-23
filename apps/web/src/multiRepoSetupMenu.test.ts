@@ -49,6 +49,10 @@ function projectRef(source: EnvironmentProject): ScopedProjectRef {
   return { environmentId: source.environmentId, projectId: source.id };
 }
 
+// The items that set the project up elsewhere, without Manage repositories.
+const setupItems = (menu: ReturnType<typeof buildMultiRepoProjectSetupMenu>) =>
+  menu.items.filter((item) => !item.id.startsWith("multi-repo-setup:members:"));
+
 const source = project();
 const baseInput = {
   projects: [source],
@@ -62,7 +66,7 @@ describe("multi-repo sidebar setup menu", () => {
       ...baseInput,
       environments: [environment(laptop, "Laptop"), environment()],
     });
-    expect(menu.items).toEqual([
+    expect(setupItems(menu)).toEqual([
       { id: "multi-repo-setup:desktop", label: "Set up on Desktop", icon: "folder" },
     ]);
     const intent = menu.setupsByAction.get("multi-repo-setup:desktop")!;
@@ -87,7 +91,7 @@ describe("multi-repo sidebar setup menu", () => {
       ...baseInput,
       environments: [environment(), environment(server, "Build server")],
     });
-    expect(menu.items).toEqual([
+    expect(setupItems(menu)).toEqual([
       {
         id: "multi-repo-setup:submenu",
         label: "Set up on...",
@@ -127,7 +131,7 @@ describe("multi-repo sidebar setup menu", () => {
     },
   ])("omits disconnected or unsupported targets: %j", (target) => {
     const menu = buildMultiRepoProjectSetupMenu({ ...baseInput, environments: [target] });
-    expect(menu.items).toEqual([]);
+    expect(setupItems(menu)).toEqual([]);
     expect(menu.setupsByAction.size).toBe(0);
   });
 
@@ -153,11 +157,13 @@ describe("multi-repo sidebar setup menu", () => {
       },
     });
     expect(
-      buildMultiRepoProjectSetupMenu({
-        ...baseInput,
-        projects: [source, existing],
-        environments: [environment()],
-      }).items,
+      setupItems(
+        buildMultiRepoProjectSetupMenu({
+          ...baseInput,
+          projects: [source, existing],
+          environments: [environment()],
+        }),
+      ),
     ).toEqual([]);
   });
 
@@ -173,7 +179,7 @@ describe("multi-repo sidebar setup menu", () => {
       environments: [environment()],
       canSetUp: () => true,
     });
-    expect(menu.items).toHaveLength(1);
+    expect(setupItems(menu)).toHaveLength(1);
     expect(menu.setupsByAction.get("multi-repo-setup:desktop")?.setup.source).toBe(copy);
   });
 
@@ -184,12 +190,41 @@ describe("multi-repo sidebar setup menu", () => {
   ])("does not offer ordinary, empty or uncloneable projects: %j", (overrides) => {
     const source = project(laptop, overrides);
     expect(
-      buildMultiRepoProjectSetupMenu({
-        projects: [source, project(server)],
-        projectRefs: [projectRef(source)],
-        environments: [environment()],
-        canSetUp: () => true,
-      }).items,
+      setupItems(
+        buildMultiRepoProjectSetupMenu({
+          projects: [source, project(server)],
+          projectRefs: [projectRef(source)],
+          environments: [environment()],
+          canSetUp: () => true,
+        }),
+      ),
     ).toEqual([]);
+  });
+
+  it("offers to manage the repositories of each copy, naming the machine when there are several", () => {
+    const copy = project(server);
+    const plain = project(desktop, { multiRepo: null });
+    const manage = (refs: ReadonlyArray<EnvironmentProject>) =>
+      buildMultiRepoProjectSetupMenu({
+        projects: [source, copy, plain],
+        projectRefs: refs.map(projectRef),
+        environments: [environment(laptop, "Laptop"), environment(server, "Build server")],
+        canSetUp: () => false,
+      });
+    expect(manage([source]).items).toEqual([
+      {
+        id: "multi-repo-setup:members:laptop:product-laptop",
+        label: "Manage repositories",
+        icon: "folder",
+      },
+    ]);
+    expect(manage([source, copy]).items.map((item) => item.label)).toEqual([
+      "Manage repositories on Laptop",
+      "Manage repositories on Build server",
+    ]);
+    expect(manage([plain]).items).toEqual([]);
+    expect(
+      manage([source]).membersByAction.get("multi-repo-setup:members:laptop:product-laptop"),
+    ).toEqual(projectRef(source));
   });
 });

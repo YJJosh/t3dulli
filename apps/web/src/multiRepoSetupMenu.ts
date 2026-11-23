@@ -13,7 +13,8 @@ import {
   type MultiRepoProjectSetup,
 } from "@t3tools/client-runtime/state/project-grouping";
 import { msg } from "gt-react";
-import type { CommandPaletteMultiRepoSetup } from "./commandPaletteBus";
+import { type CommandPaletteMultiRepoSetup, openCommandPalette } from "./commandPaletteBus";
+import { openMultiRepoMembers } from "./components/MultiRepoMembersDialog";
 import { m } from "./i18n/messages";
 
 /** Whether an environment can clone a multi-repo project from another machine. */
@@ -95,11 +96,39 @@ export function listMultiRepoSetupTargets<Environment extends MultiRepoSetupEnvi
   });
 }
 
-/** "Set up on <machine>" items for a project's menu; built only when the menu opens. */
+/**
+ * "Manage repositories" and "Set up on <machine>" items for a project's menu; built only
+ * when the menu opens.
+ */
 export function buildMultiRepoProjectSetupMenu(
   input: MultiRepoSetupInput<MultiRepoSetupEnvironment>,
 ) {
   const setupsByAction = new Map<MultiRepoSetupMenuId, CommandPaletteMultiRepoSetup>();
+  const membersByAction = new Map<MultiRepoSetupMenuId, ScopedProjectRef>();
+  const memberItems: Array<ContextMenuItem<MultiRepoSetupMenuId>> = [];
+  const groups = input.projects.filter(
+    (project) =>
+      project.multiRepo != null &&
+      input.projectRefs.some(
+        (ref) => ref.environmentId === project.environmentId && ref.projectId === project.id,
+      ),
+  );
+  for (const project of groups) {
+    const id: MultiRepoSetupMenuId = `multi-repo-setup:members:${project.environmentId}:${project.id}`;
+    membersByAction.set(id, { environmentId: project.environmentId, projectId: project.id });
+    const environment = input.environments.find(
+      (candidate) => candidate.environmentId === project.environmentId,
+    );
+    memberItems.push({
+      id,
+      // Each machine keeps its own list, so a project on several names the machine.
+      label:
+        groups.length > 1 && environment
+          ? m(msg("Manage repositories on {environment}", { environment: environment.label }))
+          : m(msg("Manage repositories")),
+      icon: "folder",
+    });
+  }
   const items: Array<ContextMenuItem<MultiRepoSetupMenuId>> = [];
   for (const { environment, setup } of listMultiRepoSetupTargets(input)) {
     const id: MultiRepoSetupMenuId = `multi-repo-setup:${environment.environmentId}`;
@@ -110,16 +139,29 @@ export function buildMultiRepoProjectSetupMenu(
       icon: "folder",
     });
   }
-  const menuItems: ReadonlyArray<ContextMenuItem<MultiRepoSetupMenuId>> =
-    items.length > 1
+  const menuItems: ReadonlyArray<ContextMenuItem<MultiRepoSetupMenuId>> = [
+    ...memberItems,
+    ...(items.length > 1
       ? [
           {
-            id: "multi-repo-setup:submenu",
+            id: "multi-repo-setup:submenu" as const,
             label: m(msg("Set up on...")),
             icon: "folder",
             children: items,
           },
         ]
-      : items;
-  return { items: menuItems, setupsByAction };
+      : items),
+  ];
+  return { items: menuItems, setupsByAction, membersByAction };
+}
+
+/** Runs a clicked item of `buildMultiRepoProjectSetupMenu`. */
+export function runMultiRepoSetupMenuAction(
+  menu: ReturnType<typeof buildMultiRepoProjectSetupMenu>,
+  id: MultiRepoSetupMenuId,
+) {
+  const members = menu.membersByAction.get(id);
+  if (members) return openMultiRepoMembers(members);
+  const multiRepoSetup = menu.setupsByAction.get(id);
+  if (multiRepoSetup) openCommandPalette({ multiRepoSetup });
 }

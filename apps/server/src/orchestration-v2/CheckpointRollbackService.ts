@@ -33,6 +33,7 @@ import { CheckpointRestoreError, CheckpointServiceV2 } from "./CheckpointService
 import { EventSinkV2 } from "./EventSink.ts";
 import * as IdAllocator from "@t3tools/provider-core/server/IdAllocator";
 import { ProjectionStoreV2 } from "./ProjectionStore.ts";
+import { WORKLER_CONFIG_FILE } from "../vcs/MultiRepoWorkspaces.ts";
 import { GIT_INDEX_LOCKED_DETAIL } from "../vcs/VcsProcess.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import type * as ProviderAdapter from "@t3tools/provider-core/server/ProviderAdapter";
@@ -240,10 +241,15 @@ export const layer: Layer.Layer<
       // Recreated only where the server would have made it, as turn start does.
       if (worktreePath != null && branch != null) {
         // A failed removal can leave the folder without its checkout; only a file restore replaces it.
+        // A multi-repo workspace has no `.git` of its own, only its `.workler` and member clones.
         const leftover =
           restoreFiles &&
           (yield* fileSystem.exists(worktreePath)) &&
-          !(yield* fileSystem.exists(path.join(worktreePath, ".git")));
+          !(yield* fileSystem.exists(path.join(worktreePath, ".git"))) &&
+          !(
+            (yield* fileSystem.exists(path.join(worktreePath, WORKLER_CONFIG_FILE))) &&
+            (yield* checkpoints.isCheckout(worktreePath))
+          );
         if (leftover || !(yield* fileSystem.exists(worktreePath))) {
           const project = yield* projects.get(context.thread.projectId);
           if (
@@ -332,6 +338,8 @@ export const layer: Layer.Layer<
           (turn.runAttemptId === null || !rolledBackAttemptIds.has(turn.runAttemptId)),
       );
 
+      // The conversation is rewound first, so a restore that cannot happen must stop it.
+      if (input.restoreFiles !== false) yield* checkpoints.assertRestorable({ scope, checkpoint });
       const snapshot =
         runsToRollback.length === 0
           ? { providerThread }

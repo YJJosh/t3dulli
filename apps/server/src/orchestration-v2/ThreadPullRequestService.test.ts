@@ -23,6 +23,7 @@ import * as Stream from "effect/Stream";
 import * as TestClock from "effect/testing/TestClock";
 
 import * as BackgroundPolicy from "../background/BackgroundPolicy.ts";
+import * as MultiRepoWorkspaces from "../vcs/MultiRepoWorkspaces.ts";
 import * as GitManager from "../git/GitManager.ts";
 import * as ProjectStore from "./ProjectStore.ts";
 import * as RepositoryIdentityResolver from "../project/RepositoryIdentityResolver.ts";
@@ -635,6 +636,128 @@ describe("ThreadPullRequestServiceV2 reads", () => {
           { branch: child.branch, refresh: true },
         ]);
       }).pipe(Effect.provide(dependencies));
+    }),
+  );
+
+  it.effect("links each multi-repo member's pull request for the shared branch", () =>
+    Effect.gen(function* () {
+      const project: OrchestrationProjectShell = {
+        id: ProjectId.make("project-1"),
+        title: "Group",
+        workspaceRoot: "/workspace/group",
+        defaultModelSelection: null,
+        scripts: [],
+        createdAt: "2026-08-01T00:00:00.000Z",
+        updatedAt: "2026-08-01T00:00:00.000Z",
+      };
+      const workspace = "/workspace/group/.worktrees/feature";
+      const dismissed = {
+        host: "github.com",
+        repository: "acme/web",
+        number: 7,
+        url: "https://github.com/acme/web/pull/7",
+        source: "stack-dismissed" as const,
+        linkedAt: "2026-09-19T00:00:00.000Z",
+        snapshot: null,
+        stack: null,
+      };
+      const threads = [
+        { ...threadShell("plain"), branch: "feature", worktreePath: workspace },
+        {
+          ...threadShell("dismissed-web"),
+          branch: "feature",
+          worktreePath: workspace,
+          pullRequests: [dismissed],
+        },
+      ];
+      const pullRequestOf = (repository: string, number: number) => ({
+        number,
+        url: `https://github.com/acme/${repository}/pull/${number}`,
+        title: `${repository} work`,
+        baseRef: "main",
+        headRef: "feature",
+        state: "open" as const,
+        updatedAt: null,
+        repositoryKey: `github.com/acme/${repository}`,
+      });
+      const lookups: Array<string> = [];
+      const activation = yield* Deferred.make<void>();
+      const sweepStarted = yield* Deferred.make<void>();
+      const commands: Array<OrchestrationV2ServerCommand> = [];
+      yield* Effect.gen(function* () {
+        const service = yield* ThreadPullRequestService.make;
+        yield* service.start();
+        yield* Deferred.succeed(activation, undefined);
+        yield* Deferred.await(sweepStarted);
+        yield* service.drain;
+      }).pipe(
+        Effect.provide(
+          Layer.mergeAll(
+            Layer.mock(Orchestrator.OrchestratorV2)({
+              streamDomainEvents: Stream.never,
+              getPullRequestSnapshot: () =>
+                Deferred.succeed(sweepStarted, undefined).pipe(
+                  Effect.as({ snapshotSequence: 1, threads }),
+                ),
+              dispatch: (command) =>
+                Effect.sync(() => {
+                  commands.push(command);
+                  return { sequence: 2, storedEvents: [] };
+                }),
+            }),
+            Layer.mock(ProjectStore.ProjectStoreV2)({
+              listShells: () => Effect.succeed([project]),
+              getShell: () => Effect.succeedSome(project),
+            }),
+            Layer.mock(MultiRepoWorkspaces.MultiRepoWorkspaces)({
+              members: (cwd) => Effect.succeed(cwd === workspace ? ["api", "web", "docs"] : null),
+            }),
+            Layer.mock(GitManager.GitManager)({
+              branchPullRequest: ({ cwd, branch }) =>
+                Effect.sync(() => {
+                  lookups.push(`${cwd}@${branch}`);
+                  return cwd.endsWith("/api")
+                    ? pullRequestOf("api", 3)
+                    : cwd.endsWith("/web")
+                      ? pullRequestOf("web", 7)
+                      : null;
+                }),
+            }),
+            Layer.mock(PullRequestService.PullRequestService)({}),
+            Layer.mock(RepositoryIdentityResolver.RepositoryIdentityResolver)({
+              resolve: () => Effect.succeed(null),
+            }),
+            Layer.mock(BackgroundPolicy.BackgroundPolicy)({}),
+            Layer.succeed(ServerActivation.ServerActivation, Deferred.await(activation)),
+            Layer.succeed(
+              SecureRandom.SecureRandom,
+              SecureRandom.make((size) => new Uint8Array(size).fill(1)),
+            ),
+            FileSystem.layerNoop({}),
+            Path.layer,
+          ),
+        ),
+      );
+
+      expect(lookups.toSorted()).toEqual(
+        ["api", "docs", "web"].map((member) => `${workspace}/${member}@feature`),
+      );
+      expect(
+        commands.map((command) => {
+          if (command.type !== "thread.pull-request.link") throw new Error(command.type);
+          return [
+            command.threadId,
+            command.repository,
+            command.number,
+            command.source,
+            command.member,
+          ];
+        }),
+      ).toEqual([
+        ["plain", "acme/api", 3, "stack", "api"],
+        ["dismissed-web", "acme/api", 3, "stack", "api"],
+        ["plain", "acme/web", 7, "stack", "web"],
+      ]);
     }),
   );
 

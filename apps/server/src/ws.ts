@@ -2979,6 +2979,30 @@ export const layerWsRpc = (
                 (cause) => new OrchestrationDispatchCommandError({ message: cause.message, cause }),
               ),
             ),
+        [WS_METHODS.projectsMultiRepoMembers]: (input) =>
+          projectService
+            .multiRepoMembers(input.projectId)
+            .pipe(
+              Effect.mapError(
+                (cause) => new OrchestrationDispatchCommandError({ message: cause.message, cause }),
+              ),
+            ),
+        [WS_METHODS.projectsAddMultiRepoMember]: (input) =>
+          projectService
+            .addMultiRepoMember(input.projectId, input.path)
+            .pipe(
+              Effect.mapError(
+                (cause) => new OrchestrationDispatchCommandError({ message: cause.message, cause }),
+              ),
+            ),
+        [WS_METHODS.projectsRemoveMultiRepoMember]: (input) =>
+          projectService
+            .removeMultiRepoMember(input.projectId, input.path)
+            .pipe(
+              Effect.mapError(
+                (cause) => new OrchestrationDispatchCommandError({ message: cause.message, cause }),
+              ),
+            ),
         [WS_METHODS.projectsInspectMultiRepoFolder]: (input) =>
           projectService
             .inspectMultiRepoFolder(input.path)

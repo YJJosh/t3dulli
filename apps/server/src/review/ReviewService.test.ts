@@ -1,3 +1,4 @@
+import * as NodeCrypto from "@effect/platform-node/NodeCrypto";
 import * as NodeServices from "@effect/platform-node/NodeServices";
 import { assert, describe, it } from "@effect/vitest";
 import * as Effect from "effect/Effect";
@@ -11,6 +12,8 @@ import * as ProjectStore from "../orchestration-v2/ProjectStore.ts";
 import * as SqlitePersistence from "../persistence/Sqlite.ts";
 import * as ServerSettings from "../serverSettings.ts";
 import * as GitVcsDriver from "../vcs/GitVcsDriver.ts";
+import * as MultiRepoWorkspaces from "../vcs/MultiRepoWorkspaces.ts";
+import * as VcsProcess from "../vcs/VcsProcess.ts";
 import * as VcsDriverRegistry from "../vcs/VcsDriverRegistry.ts";
 import * as KnownWorkspaces from "../workspace/KnownWorkspaces.ts";
 import * as ReviewService from "./ReviewService.ts";
@@ -24,9 +27,17 @@ function layer(input: {
   readonly projectRoots?: ReadonlyArray<string> | "unavailable";
   readonly threadWorktrees?: ReadonlyArray<{ worktreePath: string; deleted?: boolean }>;
   readonly gitWorktrees?: ReadonlyArray<string>;
+  /** Runs real Git and treats `cwd` as a multi-repo group of these members. */
+  readonly group?: { readonly cwd: string; readonly members: ReadonlyArray<string> };
 }) {
   const projectRoots = input.projectRoots ?? [];
+  const { group } = input;
   return ReviewService.layer.pipe(
+    Layer.provide(
+      Layer.mock(MultiRepoWorkspaces.MultiRepoWorkspaces)({
+        members: (cwd) => Effect.succeed(group?.cwd === cwd ? group.members : null),
+      }),
+    ),
     Layer.provide(KnownWorkspaces.layer),
     Layer.provide(
       Layer.effectDiscard(
@@ -79,10 +90,16 @@ function layer(input: {
           }),
       }),
     ),
-    Layer.provide(
-      Layer.mock(GitVcsDriver.GitVcsDriver)({
-        listWorktreePaths: () => Effect.succeed([...(input.gitWorktrees ?? [])]),
-      }),
+    Layer.provideMerge(
+      group === undefined
+        ? Layer.mock(GitVcsDriver.GitVcsDriver)({
+            listWorktreePaths: () => Effect.succeed([...(input.gitWorktrees ?? [])]),
+          })
+        : GitVcsDriver.layer.pipe(
+            Layer.provide(VcsProcess.layer),
+            Layer.provide(ServerConfig.layerTest(input.workspaceRoot, input.baseDir)),
+            Layer.provide(Layer.mergeAll(NodeServices.layer, NodeCrypto.layer)),
+          ),
     ),
     Layer.provide(
       ServerSettings.ServerSettingsService.layerTest({
@@ -96,6 +113,128 @@ function layer(input: {
 }
 
 describe("ReviewService", () => {
+  it.effect("reviews every member of a multi-repo group under its folder", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const workspaceRoot = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-group-" }),
+      );
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
+      const cwd = `${workspaceRoot}/group`;
+      const result = yield* Effect.gen(function* () {
+        const git = yield* GitVcsDriver.GitVcsDriver;
+        const run = (repo: string, args: ReadonlyArray<string>) =>
+          git.execute({ operation: "test", cwd: repo, args });
+        for (const member of ["api", "web"]) {
+          const repo = `${cwd}/${member}`;
+          yield* fs.makeDirectory(repo, { recursive: true });
+          yield* run(repo, ["init", "-b", "main"]);
+          yield* run(repo, ["config", "user.email", "t@example.test"]);
+          yield* run(repo, ["config", "user.name", "Test"]);
+          yield* fs.writeFileString(`${repo}/README.md`, `# ${member}\n`);
+          yield* run(repo, ["add", "."]);
+          yield* run(repo, ["commit", "-m", `${member} initial`]);
+        }
+        yield* run(`${cwd}/api`, ["checkout", "-b", "feature"]);
+        yield* fs.writeFileString(`${cwd}/api/work.txt`, "work\n");
+        yield* run(`${cwd}/api`, ["add", "."]);
+        yield* run(`${cwd}/api`, ["commit", "-m", "api work"]);
+        yield* fs.writeFileString(`${cwd}/api/README.md`, "# api changed\n");
+        yield* fs.writeFileString(`${cwd}/web/new.txt`, "new\n");
+        const review = yield* ReviewService.ReviewService;
+        const preview = yield* review.getDiffPreview({ cwd, sourceKind: "working-tree" });
+        const file = yield* review.getDiffPreview({
+          cwd,
+          sourceKind: "working-tree",
+          file: { path: "api/README.md", previousPath: null, sourceKind: "working-tree" },
+        });
+        const contents = yield* review.getDiffFileContents({
+          cwd,
+          sourceKind: "working-tree",
+          changeType: "change",
+          baseRef: "HEAD",
+          headRef: null,
+          oldPath: "api/README.md",
+          newPath: "api/README.md",
+        });
+        const commits = yield* review.getBranchCommits({ cwd });
+        const commit = yield* review.getDiffPreview({ cwd, commitSha: commits.commits[0]!.sha });
+        return { preview, file, contents, commits, commit };
+      }).pipe(
+        // `gone` is listed but has no folder here, as a member added after the workspace.
+        Effect.provide(
+          layer({ workspaceRoot, baseDir, group: { cwd, members: ["api", "web", "gone"] } }),
+        ),
+      );
+
+      const [source] = result.preview.sources;
+      assert.deepStrictEqual(
+        source?.files?.map((file) => file.path),
+        ["api/README.md", "web/new.txt"],
+      );
+      assert.include(source?.diff, "diff --git a/api/README.md b/api/README.md");
+      assert.include(source?.diff, "+++ b/web/new.txt");
+      assert.include(result.file.sources[0]?.diff, "+++ b/api/README.md");
+      assert.notInclude(result.file.sources[0]?.diff, "web/new.txt");
+      assert.deepStrictEqual(result.contents, {
+        oldContents: "# api\n",
+        newContents: "# api changed\n",
+      });
+      // Each member lists its own commits against its own base.
+      assert.deepStrictEqual(
+        result.commits.commits.map((commit) => commit.subject),
+        ["api: api work"],
+      );
+      assert.include(result.commit.sources[0]?.diff, "+++ b/api/work.txt");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
+  it.effect("keeps every member's changes when one member is too large to list", () =>
+    Effect.gen(function* () {
+      const fs = yield* FileSystem.FileSystem;
+      const workspaceRoot = yield* fs.realPath(
+        yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-group-large-" }),
+      );
+      const baseDir = yield* fs.makeTempDirectoryScoped({ prefix: "t3-review-base-" });
+      const cwd = `${workspaceRoot}/group`;
+      const preview = yield* Effect.gen(function* () {
+        const git = yield* GitVcsDriver.GitVcsDriver;
+        const run = (repo: string, args: ReadonlyArray<string>) =>
+          git.execute({ operation: "test", cwd: repo, args });
+        for (const member of ["api", "docs"]) {
+          const repo = `${cwd}/${member}`;
+          yield* fs.makeDirectory(repo, { recursive: true });
+          yield* run(repo, ["init", "-b", "main"]);
+          yield* run(repo, ["config", "user.email", "t@example.test"]);
+          yield* run(repo, ["config", "user.name", "Test"]);
+          yield* fs.writeFileString(`${repo}/README.md`, `# ${member}\n`);
+          yield* run(repo, ["add", "."]);
+          yield* run(repo, ["commit", "-m", `${member} initial`]);
+        }
+        // More untracked files than review lists, so api sends a bounded patch.
+        yield* fs.makeDirectory(`${cwd}/api/generated`);
+        yield* Effect.forEach(
+          Array.from({ length: 5_001 }, (_, index) => index),
+          (index) => fs.writeFileString(`${cwd}/api/generated/${index}.txt`, ""),
+          { concurrency: 64, discard: true },
+        );
+        yield* fs.writeFileString(`${cwd}/docs/README.md`, "# docs changed\n");
+        const review = yield* ReviewService.ReviewService;
+        return yield* review.getDiffPreview({
+          cwd,
+          sourceKind: "working-tree",
+          metadataOnly: true,
+        });
+      }).pipe(
+        Effect.provide(layer({ workspaceRoot, baseDir, group: { cwd, members: ["api", "docs"] } })),
+      );
+
+      const [source] = preview.sources;
+      assert.isUndefined(source?.files);
+      assert.include(source?.diff, "+++ b/docs/README.md");
+    }).pipe(Effect.provide(NodeServices.layer)),
+  );
+
   it.effect("rejects diff preview cwd outside the configured workspace roots", () =>
     Effect.gen(function* () {
       const fs = yield* FileSystem.FileSystem;

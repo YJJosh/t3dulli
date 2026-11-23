@@ -22,6 +22,7 @@ import ProjectScriptsControl, {
 import { T, useGT } from "gt-react";
 import { useState, type ComponentProps } from "react";
 import { ThreadDetailsCard } from "./ThreadDetailsCard";
+import { MultiRepoStatusRows } from "./MultiRepoStatusRows";
 import { OpenInPicker } from "./OpenInPicker";
 import { ThreadDetailsSection } from "./ThreadDetailsSection";
 import { ThreadAutomationsPanel } from "./ThreadAutomationsPanel";
@@ -68,7 +69,7 @@ interface ThreadDetailsPanelProps extends Pick<
   gitCwd: string | null;
   workspaceMutationId: string | null;
   isGitRepo: boolean;
-  /** A multi-repo project has no repository of its own, so it shows no Git actions. */
+  /** A multi-repo project has no repository of its own: it shows its members' status, not Git actions. */
   isMultiRepoProject: boolean;
   multiRepoCandidate?: ComponentProps<typeof GitActionsControl>["multiRepoCandidate"];
   envLocked: boolean;
@@ -175,6 +176,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
           branch: offersGit && props.isGitRepo && visible.branch,
           // Without a branch selector, linked pull requests still need somewhere to show.
           pullRequests: !(offersGit && props.isGitRepo) && visible.branch,
+          multiRepo: offersGit && props.isMultiRepoProject && (visible.branch || visible.changes),
           git:
             offersGit &&
             !props.isMultiRepoProject &&
@@ -234,7 +236,7 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                 </ThreadDetailsSection>
               ) : null}
 
-              {show.branch || show.pullRequests || show.git ? (
+              {show.branch || show.pullRequests || show.multiRepo || show.git ? (
                 <ThreadDetailsSection
                   headingId="thread-details-version-control-heading"
                   title={gt("Version Control")}
@@ -244,6 +246,18 @@ export function ThreadDetailsPanel(props: ThreadDetailsPanelProps) {
                   <div className="flex flex-col">
                     {show.branch ? (
                       <BranchToolbar layout="panel" panelSection="branch" {...branchToolbarProps} />
+                    ) : null}
+                    {show.multiRepo && props.gitCwd ? (
+                      <MultiRepoStatusRows
+                        environmentId={props.environmentId}
+                        projectId={props.projectId}
+                        cwd={props.gitCwd}
+                        members={project?.multiRepo?.members.map((member) => member.path) ?? []}
+                        workspaceMutationId={props.workspaceMutationId}
+                        showBranch={visible.branch}
+                        showChanges={visible.changes}
+                        onOpenChanges={props.onOpenChanges}
+                      />
                     ) : null}
                     {show.pullRequests ? (
                       <ThreadDetailsThreadPrRows

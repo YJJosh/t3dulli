@@ -206,7 +206,10 @@ function LinkRowImpl({
                 #{link.number}
               </TooltipTrigger>
               <TooltipPopup>
-                {resolve(SOURCE_LABELS[link.source])} · <RelativeTime timestamp={link.linkedAt} />
+                {link.member === undefined || link.source !== "stack"
+                  ? resolve(SOURCE_LABELS[link.source])
+                  : gt("Found on this thread's branch in {member}", { member: link.member })}{" "}
+                · <RelativeTime timestamp={link.linkedAt} />
               </TooltipPopup>
             </Tooltip>
           }

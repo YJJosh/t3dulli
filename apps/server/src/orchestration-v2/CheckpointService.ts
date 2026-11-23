@@ -142,6 +142,13 @@ export interface CheckpointServiceV2Shape {
     readonly scope: OrchestrationV2CheckpointScope;
     readonly checkpoint: OrchestrationV2Checkpoint;
   }) => Effect.Effect<void, CheckpointServiceV2Error>;
+  /** Whether `cwd` is a checkout checkpoints work in: a repository, or a multi-repo group with members. */
+  readonly isCheckout: (cwd: string) => Effect.Effect<boolean>;
+  /** Fails as `restore` would for a checkpoint whose ref is gone, before anything changes. */
+  readonly assertRestorable: (input: {
+    readonly scope: OrchestrationV2CheckpointScope;
+    readonly checkpoint: OrchestrationV2Checkpoint;
+  }) => Effect.Effect<void, CheckpointServiceV2Error>;
   readonly deleteStaleRefs: (input: {
     readonly scope: OrchestrationV2CheckpointScope;
     readonly checkpoints: ReadonlyArray<OrchestrationV2Checkpoint>;
@@ -316,7 +323,10 @@ export const layer: Layer.Layer<
             );
           }
 
-          yield* captureWorkspaceCheckpoint({ cwd: input.scope.cwd, checkpointRef }, true).pipe(
+          yield* captureWorkspaceCheckpoint(
+            { cwd: input.scope.cwd, checkpointRef, onlyMissing: true },
+            true,
+          ).pipe(
             Effect.catchTags({
               VcsUnsupportedOperationError: () => Effect.void,
             }),
@@ -585,6 +595,27 @@ export const layer: Layer.Layer<
         ),
       );
 
+    const isCheckout: CheckpointServiceV2Shape["isCheckout"] = (cwd) =>
+      checkpointStore.isGitRepository(cwd).pipe(Effect.orElseSucceed(() => false));
+
+    const assertRestorable: CheckpointServiceV2Shape["assertRestorable"] = Effect.fn(
+      "CheckpointService.assertRestorable",
+    )(function* (input) {
+      const unavailable = (cause: unknown) =>
+        new CheckpointRestoreError({
+          scopeId: input.scope.id,
+          checkpointId: input.checkpoint.id,
+          cause,
+        });
+      if (input.checkpoint.status !== "ready") {
+        return yield* unavailable(`Checkpoint status is ${input.checkpoint.status}.`);
+      }
+      const available = yield* checkpointStore
+        .canRestoreCheckpoint({ cwd: input.scope.cwd, checkpointRef: input.checkpoint.ref })
+        .pipe(Effect.mapError(unavailable));
+      if (!available) return yield* unavailable("Checkpoint ref is unavailable.");
+    });
+
     const deleteStaleRefs: CheckpointServiceV2Shape["deleteStaleRefs"] = (input) =>
       withWorkspaceLock(
         input.scope.cwd,
@@ -618,6 +649,8 @@ export const layer: Layer.Layer<
       captureBaseline,
       materializeBaselineCheckpoint,
       capture,
+      assertRestorable,
+      isCheckout,
       restore,
       deleteStaleRefs,
     } satisfies CheckpointServiceV2Shape);

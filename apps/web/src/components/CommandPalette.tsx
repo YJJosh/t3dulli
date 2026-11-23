@@ -1,4 +1,5 @@
 import { MultiRepoProjectForm } from "./MultiRepoProjectForm";
+import { openMultiRepoMembers } from "./MultiRepoMembersDialog";
 import { readCanSetUpMultiRepoProject } from "../hooks/useMultiRepoSetupTargets";
 import { canSetUpMultiRepoProjects } from "../multiRepoSetupMenu";
 import {
@@ -1918,6 +1919,30 @@ function OpenCommandPaletteDialog(props: {
           params: { projectKey: contextualProjectGroup.projectKey },
         });
       },
+    });
+  }
+
+  // Each machine keeps its own list, so this is the copy the active thread works in.
+  const multiRepoProject = projects.find(
+    (project) =>
+      project.multiRepo != null &&
+      contextualProjectRef !== null &&
+      project.environmentId === contextualProjectRef.environmentId &&
+      project.id === contextualProjectRef.projectId,
+  );
+  if (multiRepoProject) {
+    actionItems.push({
+      kind: "action",
+      value: "action:multi-repo-members",
+      searchTerms: ["repositories", "repos", "multi-repo", "add", "remove", "workler"],
+      title: gt("Manage repositories"),
+      description: currentProjectGroup?.displayName ?? multiRepoProject.title,
+      icon: <FolderIcon className={ITEM_ICON_CLASS} />,
+      run: async () =>
+        openMultiRepoMembers({
+          environmentId: multiRepoProject.environmentId,
+          projectId: multiRepoProject.id,
+        }),
     });
   }
 

@@ -10,11 +10,13 @@ import * as Semaphore from "effect/Semaphore";
 import { workerThreadEnvironment } from "../process/workerThreadEnvironment.ts";
 
 type WorklerMethod =
+  | "addGroupProject"
   | "createWorkspace"
   | "discoverProjects"
   | "initProject"
   | "inspectProject"
   | "listWorkspaces"
+  | "removeGroupProject"
   | "removeWorkspace";
 
 /** A lazy, server-local adapter for Workler's workspace library. */
@@ -109,6 +111,16 @@ export class WorklerWorkspaceService extends Context.Service<
      * as `workler init` does. Returns an existing group unchanged.
      */
     readonly initGroup: (root: string) => Effect.Effect<WorklerGroup, WorklerWorkspaceError>;
+    /** Lists the repository at `root/project` in the group at `root`; returns the members. */
+    readonly addGroupProject: (
+      root: string,
+      project: string,
+    ) => Effect.Effect<WorklerGroup, WorklerWorkspaceError>;
+    /** Stops listing `project` in the group at `root`, leaving its folder; returns the members. */
+    readonly removeGroupProject: (
+      root: string,
+      project: string,
+    ) => Effect.Effect<WorklerGroup, WorklerWorkspaceError>;
   }
 >()("t3/vcs/WorklerWorkspaceService") {}
 
@@ -290,6 +302,19 @@ export const makeFromRunner = (run: WorklerRunner): WorklerWorkspaceService["Ser
       const result = yield* write(call(operation, root, "initProject", [root]));
       return { projects: result.projects };
     }),
+    addGroupProject: Effect.fn("WorklerWorkspaceService.addGroupProject")((root, project) =>
+      write(
+        call("WorklerWorkspaceService.addGroupProject", root, "addGroupProject", [root, project]),
+      ),
+    ),
+    removeGroupProject: Effect.fn("WorklerWorkspaceService.removeGroupProject")((root, project) =>
+      write(
+        call("WorklerWorkspaceService.removeGroupProject", root, "removeGroupProject", [
+          root,
+          project,
+        ]),
+      ),
+    ),
   });
 };
 

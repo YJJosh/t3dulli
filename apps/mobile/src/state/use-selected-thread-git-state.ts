@@ -45,7 +45,8 @@ export function useSelectedThreadGitState() {
   );
 
   return {
-    isMultiRepoProject: selectedThreadProject?.multiRepo != null,
+    multiRepoMembers:
+      selectedThreadProject?.multiRepo?.members.map((member) => member.path) ?? null,
     gitOperationLabel: vcsActionLabelText(gitActionState, messages),
     sourceControlDiscovery,
     selectedThreadBranches,
