@@ -319,7 +319,9 @@ export const make = Effect.gen(function* () {
         ),
       );
     });
-    return yield* run.pipe(Effect.ensuring(dropUndo));
+    // Restoring and putting members back finish together: an interrupt in between would leave
+    // the group half restored with its undo points gone.
+    return yield* Effect.uninterruptible(run).pipe(Effect.ensuring(dropUndo));
   });
 
   /** Splits group paths by member; null keeps every path of every member. */

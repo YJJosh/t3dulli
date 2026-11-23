@@ -169,6 +169,8 @@ export const make = Effect.gen(function* () {
       // The combined patch keeps one member's budget, so a group answer stays as large as a repository's.
       for (const source of sources) {
         if (diff.length + source.diff.length > GROUP_REVIEW_PATCH_MAX_LENGTH) {
+          // Keep what fits, so one large member still shows its start.
+          diff += source.diff.slice(0, GROUP_REVIEW_PATCH_MAX_LENGTH - diff.length);
           truncated = true;
           break;
         }
